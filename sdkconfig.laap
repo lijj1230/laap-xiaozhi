@@ -1,0 +1,4 @@
+# LAAP 意识架构 × xiaozhi —— 本仓库构建配置（立创·实战派 ESP32-S3）
+# 用法：idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32s3;sdkconfig.laap" build
+CONFIG_BOARD_TYPE_LICHUANG_DEV_S3=y
+CONFIG_LANGUAGE_ZH_CN=y
