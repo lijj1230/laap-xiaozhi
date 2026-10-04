@@ -5,6 +5,7 @@ idf_component_register(
     SRCS "laap_skills.cc"
          "laap_fs.cc"
          "laap_cognition.cc"
+         "laap_rules.cc"
     INCLUDE_DIRS "."
     REQUIRES nvs_flash esp_timer esp_littlefs
 )
