@@ -827,7 +827,6 @@ void MemorySystem::reloadWork() {
     workHead_ = (workHead_ + 1) % WORK_MAX;
     if (workLen_ < WORK_MAX) workLen_++;
   }
-  (void)xp;
 }
 
 }  // namespace laap
