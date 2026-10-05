@@ -216,7 +216,7 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
   g_laap_ws_hook = s_pump;
 
   while (!turnEnd && !interrupted) {
-    if (stopReq_) { interrupted = true; break; }
+    if (s_stopReq) { interrupted = true; break; }
     if (now_ms() - lastProgress > 30000) { lastError = "30s 无进展超时"; break; }
     if (s_rlen <= 0) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
     int dlen = s_rlen;
