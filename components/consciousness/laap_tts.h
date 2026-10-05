@@ -30,7 +30,6 @@ public:
 private:
   AudioOutFn out_;
   volatile bool speaking_ = false;
-  volatile bool stopReq_ = false;
 };
 
 extern LaapTts laapTts;

@@ -75,6 +75,7 @@ static uint8_t* mp3_buf() {
 }
 #define MP3_BUF_SIZE (16 * 1024)
 static size_t s_mp3Len = 0;
+static volatile bool s_stopReq = false;   // mp3_feed_play（类外函数）可读的打断标志
 
 static void mp3_reset() { s_mp3Len = 0; }
 
@@ -83,7 +84,7 @@ static bool mp3_feed_play(HMP3Decoder dec, const uint8_t* data, size_t len, bool
   uint8_t* bufp = mp3_buf();
   if (!bufp) return false;
   if (s_mp3Len + len > MP3_BUF_SIZE) {   // 满：先播腾
-    int offs = MP3_FindSyncWord(bufp, s_mp3Len);
+    int offs = MP3FindSyncWord(bufp, s_mp3Len);
     if (offs < 0) { s_mp3Len = 0; return false; }
     memmove(bufp, bufp + offs, s_mp3Len - offs);
     s_mp3Len -= offs;
@@ -95,7 +96,7 @@ static bool mp3_feed_play(HMP3Decoder dec, const uint8_t* data, size_t len, bool
   int pos = 0;
   short pcm[1152 * 2];                   // MAX_NSAMP×2 声道上限（libhelix 规格内）
   while (pos + 4 < (int)s_mp3Len) {
-    if (stopReq_) { interrupted = true; break; }
+    if (s_stopReq) { interrupted = true; break; }
     int off = MP3FindSyncWord(bufp + pos, s_mp3Len - pos);
     if (off < 0) { pos = s_mp3Len; break; }
     pos += off;
@@ -121,7 +122,7 @@ static bool mp3_feed_play(HMP3Decoder dec, const uint8_t* data, size_t len, bool
 
 bool LaapTts::speak(const std::string& text, const std::string& voice, const std::string& rate) {
   lastError.clear();
-  stopReq_ = false;
+  s_stopReq = false;
   time_t now = time(nullptr);
   if (now < 1700000000) { lastError = "NTP 未同步，无法生成鉴权"; return false; }
   if (speaking_) { lastError = "已有播报在飞"; return false; }
@@ -157,7 +158,7 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
 
   // 等连接建立（≤10s）
   int wait = 0;
-  while (!esp_websocket_client_is_connected(ws) && wait < 100 && !stopReq_) {
+  while (!esp_websocket_client_is_connected(ws) && wait < 100 && !s_stopReq) {
     vTaskDelay(pdMS_TO_TICKS(100));
     wait++;
   }
@@ -255,6 +256,6 @@ void laap_ws_event_hook(void* event_data) {
   if (g_laap_ws_hook) g_laap_ws_hook((esp_websocket_event_data_t*)event_data);
 }
 
-void LaapTts::stop() { stopReq_ = true; }
+void LaapTts::stop() { s_stopReq = true; }
 
 }  // namespace laap
