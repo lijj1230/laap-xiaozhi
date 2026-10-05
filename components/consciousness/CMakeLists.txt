@@ -13,5 +13,5 @@ idf_component_register(
          "laap_llm.cc"
          "laap_search.cc"
     INCLUDE_DIRS "."
-    REQUIRES nvs_flash esp_timer joltwallet__littlefs esp_http_client lwip
+    REQUIRES nvs_flash esp_timer joltwallet__littlefs espressif__cjson esp_http_client lwip
 )

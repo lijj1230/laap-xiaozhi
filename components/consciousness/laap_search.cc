@@ -1,6 +1,7 @@
 #include "laap_search.h"
 #include "laap_config.h"
 #include "laap_util.h"
+#include "laap_skills.h"   // utf8_cut
 #include <esp_log.h>
 #include <esp_http_client.h>
 #include <esp_timer.h>
