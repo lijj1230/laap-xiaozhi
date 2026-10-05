@@ -6,16 +6,18 @@
 #include <esp_event.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <functional>
+#include <vector>
 
-// LAAP 意识组件（components/consciousness）
+#include "audio_codec.h"
+#include "board.h"
+
+// LAAP 意识组件（components/consciousness）——声明须在 std 类型可见之后
 namespace laap {
 bool consciousness_init();
 const char* consciousness_status_line();
 void laap_tts_set_output(std::function<void(std::vector<int16_t>&)>);
 }
-#include <functional>
-#include "audio_codec.h"
-#include "board.h"
 
 #include "application.h"
 
