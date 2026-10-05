@@ -33,4 +33,4 @@ idf_component_register(
 )
 
 # libhelix 平台识别（assembly.h/mp3dec.h 的 ARDUINO 分支=通用 GCC 路径）
-add_compile_definitions(ARDUINO=100)
+add_compile_definitions(ARDUINO=100 PROGMEM=)   # IDF6 无 pgmspace：PROGMEM 置空=普通 const
