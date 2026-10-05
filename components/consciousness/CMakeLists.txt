@@ -28,8 +28,8 @@ idf_component_register(
          "laap_llm.cc"
          "laap_search.cc"
          "laap_tts.cc"
-    INCLUDE_DIRS "." ${CMAKE_CURRENT_LIST_DIR}/libhelix
-    REQUIRES nvs_flash esp_timer joltwallet__littlefs espressif__cjson esp_http_client lwip espressif__esp_websocket_client
+    INCLUDE_DIRS "." ${CMAKE_CURRENT_LIST_DIR}/libhelix ${CMAKE_CURRENT_LIST_DIR}/../boards/common
+    REQUIRES nvs_flash esp_timer joltwallet__littlefs espressif__cjson esp_http_client lwip espressif__esp_websocket_client main
 )
 
 # libhelix 平台识别（assembly.h/mp3dec.h 的 ARDUINO 分支=通用 GCC 路径）
