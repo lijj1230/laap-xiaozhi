@@ -40,7 +40,7 @@
 
     hufftabs.c - compressed Huffman code tables
  **************************************************************************************/
-#include <pgmspace.h>
+// IDF6：pgmspace 已废除（PROGMEM 表按普通 const 访问）
 
 #include "coder.h"
 

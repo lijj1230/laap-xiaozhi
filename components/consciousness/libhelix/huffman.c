@@ -43,7 +43,7 @@
 
 #include "coder.h"
 #define PGM_READ_UNALIGNED 0 // Only support aligned reads, faster
-#include <pgmspace.h>
+// IDF6：pgmspace 已废除（PROGMEM 表按普通 const 访问）
 
 /* helper macros - see comments in hufftabs.c about the format of the huffman tables */
 #define GetMaxbits(x)   ((int)( (((unsigned short)(x)) >>  0) & 0x000f))
