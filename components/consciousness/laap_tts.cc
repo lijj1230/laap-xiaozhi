@@ -1,5 +1,4 @@
 #include "laap_tts.h"
-#include "board.h"
 #include <esp_log.h>
 #include <esp_http_client.h>
 #include <esp_websocket_client.h>
@@ -21,6 +20,8 @@ static const char* GEC_VER = "1-143.0.3650.75";
 namespace laap {
 
 LaapTts laapTts;
+
+void laap_tts_set_output(AudioOutFn fn) { laapTts.setOutput(std::move(fn)); }
 
 static uint32_t now_ms() { return (uint32_t)(esp_timer_get_time() / 1000LL); }
 
@@ -107,9 +108,9 @@ static bool mp3_feed_play(HMP3Decoder dec, const uint8_t* data, size_t len, bool
     MP3GetLastFrameInfo(dec, &fi);
     // fi.outputSamps = 采样数*声道；24kHz 单声道直写
     short* pcm = MP3GetSampBufferPtr(dec);
-    if (fi.outputSamps > 0) {
+    if (fi.outputSamps > 0 && laapTts.out_) {
       std::vector<int16_t> out(pcm, pcm + fi.outputSamps);
-      Board::GetInstance().GetAudioCodec()->OutputData(out);
+      laapTts.out_(out);
       any = true;
     }
     pos += bytesLeft;

@@ -9,6 +9,9 @@
 
 // LAAP 意识组件（components/consciousness）
 namespace laap { bool consciousness_init(); const char* consciousness_status_line(); }
+#include <functional>
+#include "audio_codec.h"
+#include "board.h"
 
 #include "application.h"
 
@@ -30,6 +33,14 @@ extern "C" void app_main(void)
         ESP_LOGW(TAG, "LAAP consciousness degraded (no persistent storage)");
     } else {
         ESP_LOGI(TAG, "LAAP consciousness: %s", laap::consciousness_status_line());
+    }
+
+    // 注入 TTS 喇叭输出适配器（意识组件不直接依赖宿主对象）
+    {
+        extern void laap_tts_set_output(std::function<void(std::vector<int16_t>&)>);
+        laap_tts_set_output([](std::vector<int16_t>& data) {
+            Board::GetInstance().GetAudioCodec()->OutputData(data);
+        });
     }
 
     // Initialize and run the application
