@@ -2,7 +2,22 @@
 # M1：cognition/skills/config 骨架；M2 起逐模块补齐 memory/llm/tts/life
 # M1+M2a：skills + fs 垫片 + cognition 认知核心；M2b 起加 laap_memory.cc / laap_llm.cc / laap_life.cc
 idf_component_register(
-    SRCS "laap_skills.cc"
+    SRCS ${CMAKE_CURRENT_LIST_DIR}/libhelix/bitstream.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/buffers.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/dct32.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/dequant.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/dqchan.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/huffman.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/hufftabs.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/imdct.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/mp3dec.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/mp3tabs.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/polyphase.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/scalfact.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/stproc.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/subband.c
+         ${CMAKE_CURRENT_LIST_DIR}/libhelix/trigtabs.c
+         "laap_skills.cc"
          "laap_fs.cc"
          "laap_cognition.cc"
          "laap_rules.cc"
@@ -12,6 +27,7 @@ idf_component_register(
          "laap_config.cc"
          "laap_llm.cc"
          "laap_search.cc"
-    INCLUDE_DIRS "."
-    REQUIRES nvs_flash esp_timer joltwallet__littlefs espressif__cjson esp_http_client lwip
+         "laap_tts.cc"
+    INCLUDE_DIRS "." ${CMAKE_CURRENT_LIST_DIR}/libhelix
+    REQUIRES nvs_flash esp_timer joltwallet__littlefs espressif__cjson esp_http_client lwip esp_websocket_common esp_websocket
 )
