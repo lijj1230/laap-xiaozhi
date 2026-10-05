@@ -29,5 +29,5 @@ idf_component_register(
          "laap_search.cc"
          "laap_tts.cc"
     INCLUDE_DIRS "." ${CMAKE_CURRENT_LIST_DIR}/libhelix
-    REQUIRES nvs_flash esp_timer joltwallet__littlefs espressif__cjson esp_http_client lwip esp_websocket_common esp_websocket
+    REQUIRES nvs_flash esp_timer joltwallet__littlefs espressif__cjson esp_http_client lwip espressif__esp_websocket_client
 )

@@ -2,6 +2,7 @@
 dependencies:
   joltwallet/littlefs: "^1.22.3"   # LAAP 意识数据分区（conscious）——IDF6 注册表命名空间
   espressif/cjson: "^1.7.19"       # IDF6 不再内置 cJSON
+  espressif/esp_websocket_client: "^1.4.0"   # LAAP TTS（Edge WS）
   espressif/ip101:
     version: ^1.1.0
     rules:
