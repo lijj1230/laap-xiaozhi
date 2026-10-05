@@ -137,10 +137,6 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
   wsConf.buffer_size = 8192;
   wsConf.network_timeout_ms = 10000;
   wsConf.keep_alive_enable = false;
-  extern void laap_ws_event_hook(void* event_data);   // 见文件尾：全局数据泵 hook
-  wsConf.event_handler = [](void* arg, esp_event_base_t base, int32_t id, void* event_data) {
-    if (id == WEBSOCKET_EVENT_DATA) laap_ws_event_hook(event_data);
-  };
   esp_websocket_client_handle_t ws = esp_websocket_client_init(&wsConf);
   if (!ws) { speaking_ = false; lastError = "ws init 失败"; return false; }
   esp_websocket_client_set_headers(ws,
@@ -152,6 +148,13 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
     lastError = "ws 启动失败";
     return false;
   }
+  // 事件注册：DATA 事件 → 全局数据泵 hook
+  void laap_ws_event_hook(void* event_data);
+  esp_websocket_register_events(ws, WEBSOCKET_EVENT_DATA,
+                                [](void* arg, esp_event_base_t, int32_t, void* ed) {
+                                  laap_ws_event_hook(ed);
+                                }, nullptr);
+
   // 等连接建立（≤10s）
   int wait = 0;
   while (!esp_websocket_client_is_connected(ws) && wait < 100 && !stopReq_) {
@@ -209,7 +212,7 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
   // 把本会话泵挂到全局 hook（esp_websocket_client 无 per-client 事件用户数据透传给
   // 静态函数的通道；全局 hook 由 laap_ws_event_hook 在事件回调里调用）
   extern std::function<void(esp_websocket_event_data_t*)> g_laap_ws_hook;
-  g_laap_ws_hook = &s_pump;
+  g_laap_ws_hook = s_pump;
 
   while (!turnEnd && !interrupted) {
     if (stopReq_) { interrupted = true; break; }
@@ -248,7 +251,7 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
 // 全局 WS 事件钩子（laap_ws_event_hook 由本组件的 ws 事件处理器调用）
 std::function<void(esp_websocket_event_data_t*)> g_laap_ws_hook = nullptr;
 
-extern "C" void laap_ws_event_hook(void* event_data) {
+void laap_ws_event_hook(void* event_data) {
   if (g_laap_ws_hook) g_laap_ws_hook((esp_websocket_event_data_t*)event_data);
 }
 
