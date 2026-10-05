@@ -8,6 +8,7 @@ idf_component_register(
          "laap_rules.cc"
          "laap_util.cc"
          "laap_memory.cc"
+         "laap_boot.cc"
     INCLUDE_DIRS "."
     REQUIRES nvs_flash esp_timer joltwallet__littlefs
 )
