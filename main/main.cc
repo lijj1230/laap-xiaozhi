@@ -8,7 +8,11 @@
 #include <freertos/task.h>
 
 // LAAP 意识组件（components/consciousness）
-namespace laap { bool consciousness_init(); const char* consciousness_status_line(); }
+namespace laap {
+bool consciousness_init();
+const char* consciousness_status_line();
+void laap_tts_set_output(std::function<void(std::vector<int16_t>&)>);
+}
 #include <functional>
 #include "audio_codec.h"
 #include "board.h"
@@ -38,7 +42,7 @@ extern "C" void app_main(void)
     // 注入 TTS 喇叭输出适配器（意识组件不直接依赖宿主对象）
     {
         extern void laap_tts_set_output(std::function<void(std::vector<int16_t>&)>);
-        laap_tts_set_output([](std::vector<int16_t>& data) {
+        laap::laap_tts_set_output([](std::vector<int16_t>& data) {
             Board::GetInstance().GetAudioCodec()->OutputData(data);
         });
     }
