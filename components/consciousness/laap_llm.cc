@@ -51,6 +51,21 @@ static bool sse_extract(const std::string& line, std::string& deltaOut) {
   return true;
 }
 
+// ---- 切句：完整 UTF-8 分隔串匹配（原 find_first_of("。！？\n") 是字节集合——
+//      '，'=EF BC 8C 与 '！'=EF BC 81 共享字节 EF/BC，会在逗号处切成半截汉字；
+//      与 v3.76g laapLabelSepAt 同族教训） ----
+static size_t sent_cut(const std::string& s) {
+  size_t best = s.find('\n');
+  auto cons = [&](const char* sep) {
+    size_t p = s.find(sep);
+    if (p != std::string::npos && (best == std::string::npos || p < best)) best = p;
+  };
+  cons("。");
+  cons("！");
+  cons("？");
+  return best;
+}
+
 // ---- 响应体处理：stream=SSE 逐行；非 stream=整包 JSON ----
 LlmReply LlmClient::do_chat(const LlmMsg* msgs, int count, int maxTokens, float temperature,
                             std::function<bool(const std::string&)> onSentence) {
@@ -91,6 +106,7 @@ LlmReply LlmClient::do_chat(const LlmMsg* msgs, int count, int maxTokens, float 
 
   char buf[2048];
   int readLen;
+  size_t bodyCap = 256 * 1024;   // 响应体上限：畸形/恶意大响应会撑爆堆（v3.76e 教训）
   while ((readLen = esp_http_client_read(hc, buf, sizeof(buf) - 1)) > 0 && !done) {
     buf[readLen] = 0;
     std::string chunk(buf, readLen);
@@ -109,15 +125,18 @@ LlmReply LlmClient::do_chat(const LlmMsg* msgs, int count, int maxTokens, float 
         carry += delta;
         // 切句（。！？\n 结尾即出句）
         size_t cut;
-        while ((cut = carry.find_first_of("。！？\n")) != std::string::npos) {
-          std::string sentence = carry.substr(0, cut + 1);
-          carry.erase(0, cut + 1);
+        while ((cut = sent_cut(carry)) != std::string::npos) {
+          size_t seplen = ((unsigned char)carry[cut] >= 0xE0) ? 3 : 1;   // 全角标点 3 字节
+          std::string sentence = carry.substr(0, cut + seplen);
+          carry.erase(0, cut + seplen);
           if (sentence.size() >= 2 && onSentence && !onSentence(sentence)) { done = true; break; }
         }
+        if (done) break;
       }
     } else {
       fullText += chunk;
     }
+    if (fullText.size() > bodyCap) break;
   }
   esp_http_client_close(hc);
   esp_http_client_cleanup(hc);
@@ -187,7 +206,10 @@ bool LlmClient::embed(const std::string& text, std::string& binOut) {
   std::string fullText;
   char buf[2048];
   int n;
-  while ((n = esp_http_client_read(hc, buf, sizeof(buf) - 1)) > 0) fullText.append(buf, n);
+  while ((n = esp_http_client_read(hc, buf, sizeof(buf) - 1)) > 0) {
+    fullText.append(buf, n);
+    if (fullText.size() > 256 * 1024) break;   // 响应体上限（同 do_chat）
+  }
   esp_http_client_close(hc);
   esp_http_client_cleanup(hc);
 

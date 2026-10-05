@@ -49,6 +49,9 @@ bool fs_write(const std::string& path, const std::string& content) {
   fclose(f);
   if (w != content.size()) { remove(tmp.c_str()); return false; }
   std::string dst = MOUNT + path;
+  // 先试覆盖 rename（littlefs 的 rename 是原子替换），失败才 remove——
+  // 缩掉"remove 与 rename 之间掉电=文件全丢"的窗口（审计 2026-10-05）
+  if (rename(tmp.c_str(), dst.c_str()) == 0) return true;
   remove(dst.c_str());
   return rename(tmp.c_str(), dst.c_str()) == 0;
 }
@@ -82,6 +85,16 @@ size_t fs_size(const std::string& path) {
   size_t sz = ftell(f);
   fclose(f);
   return sz;
+}
+
+char fs_last_char(const std::string& path) {
+  if (!s_mounted) return 0;
+  FILE* f = fopen((MOUNT + path).c_str(), "rb");
+  if (!f) return 0;
+  fseek(f, -1, SEEK_END);
+  int c = fgetc(f);   // 空文件：fseek 到 -1 后读=EOF
+  fclose(f);
+  return (c == EOF) ? 0 : (char)c;
 }
 
 }  // namespace laap

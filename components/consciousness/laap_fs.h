@@ -18,5 +18,6 @@ bool fs_append(const std::string& path, const std::string& line);            // 
 bool fs_remove(const std::string& path);
 bool fs_exists(const std::string& path);
 size_t fs_size(const std::string& path);
+char fs_last_char(const std::string& path);   // 末字节（空/缺/未挂载=0）——残尾检查用，不整读文件
 
 }  // namespace laap

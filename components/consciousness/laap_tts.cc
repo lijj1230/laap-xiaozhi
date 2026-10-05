@@ -169,12 +169,18 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
     return false;
   }
 
-  // speech.config + SSML
+  // speech.config + SSML（有限超时：portMAX_DELAY 在 TCP 黑洞时会把心跳任务永久挂死、
+  // speaking_ 锁死——审计 2026-10-05）
   std::string ts = js_date();
   std::string cfgmsg = "X-Timestamp:" + ts + "\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n"
     "{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"false\"},"
     "\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}";
-  esp_websocket_client_send_text(ws, cfgmsg.c_str(), cfgmsg.size(), portMAX_DELAY);
+  if (esp_websocket_client_send_text(ws, cfgmsg.c_str(), cfgmsg.size(), pdMS_TO_TICKS(10000)) < 0) {
+    esp_websocket_client_destroy(ws);
+    speaking_ = false;
+    lastError = "speech.config 发送失败";
+    return false;
+  }
 
   std::string esc;
   for (char c : text) {
@@ -187,7 +193,12 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
     "Z\r\nPath:ssml\r\n\r\n<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>"
     "<voice name='" + voice + "'><prosody pitch='+0Hz' rate='" + rate + "' volume='+0%'>" + esc +
     "</prosody></voice></speak>";
-  esp_websocket_client_send_text(ws, ssml.c_str(), ssml.size(), portMAX_DELAY);
+  if (esp_websocket_client_send_text(ws, ssml.c_str(), ssml.size(), pdMS_TO_TICKS(10000)) < 0) {
+    esp_websocket_client_destroy(ws);
+    speaking_ = false;
+    lastError = "ssml 发送失败";
+    return false;
+  }
 
   // 收流：二进制帧=带2B头的 MP3 块 → feed 解码播；文本帧含 turn.end 结束
   mp3_reset();

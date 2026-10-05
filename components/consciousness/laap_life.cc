@@ -231,11 +231,11 @@ static std::string user_prompt_base() {
   return p;
 }
 
-// R3：预期中文短语 → 类别码（"不来"先于"会来"判——"不会来"含"会来"；
-// 同时含两者=整串菜单回显没选题）
+// R3：预期中文短语 → 类别码（"不会来"先于"会来"判——"不会来"含"会来"；
+// "不来"与"会来"并存=整串菜单回显没选题）
 static uint8_t parse_expect_cat(const std::string& s) {
   bool hasCome = s.find("会来") != std::string::npos;
-  bool hasAway = s.find("不来") != std::string::npos;
+  bool hasAway = s.find("不来") != std::string::npos || s.find("不会来") != std::string::npos;
   if (hasCome && hasAway) return Cognition::EXP_NONE;
   if (hasAway) return Cognition::EXP_OWNER_AWAY;
   if (hasCome) return Cognition::EXP_OWNER_COME;
@@ -348,7 +348,8 @@ static void try_express(bool forced, const char* trigger) {
   mind.onExpressed(true);
   memory.logEvent("aris", "【自发】" + r.say);
   ESP_LOGI(TAG, "自发表达: %s", r.say.c_str());
-  laapTts.speak(r.say, TTS_VOICE, rate_for(expr));
+  if (!laapTts.speak(r.say, TTS_VOICE, rate_for(expr)))
+    ESP_LOGW(TAG, "表达播报失败: %s", laapTts.lastError.c_str());
 }
 
 // ============================================================
@@ -408,6 +409,8 @@ static int try_monologue(bool force) {
   // 第二跳：成文
   std::string up = "[最近发生] " + ctx + "\n[话题] " + topic;
   if (!know.empty()) up += "\n[查到的资料] " + know;
+  if (!s_recentTopics.empty())   // v3.27 断主题自强化环：想过的别再想（环维护在下方）
+    up += "\n[最近想过的主题（不要重复）] " + s_recentTopics;
   up += "\n\n现在以第一人称写一段独白：像自言自语，1~3 句，真诚不客套，不要列表，"
         "不要说出情绪词本身。最后一行可选：「预期:」+ 主人会来|主人不来|环境有动静|环境安静|没想好"
         "（五选一写一行即可，也可整个省略）。";
@@ -454,7 +457,8 @@ static int try_monologue(bool force) {
     }
   }
   ESP_LOGI(TAG, "独白: %s", r2.say.c_str());
-  laapTts.speak(r2.say, TTS_VOICE, rate_for(expr));
+  if (!laapTts.speak(r2.say, TTS_VOICE, rate_for(expr)))
+    ESP_LOGW(TAG, "独白播报失败: %s", laapTts.lastError.c_str());
   s_recentTopics += topic + "；";
   if (s_recentTopics.size() > 240) {   // 从字符边界切（字节切会切半汉字）
     size_t cut = s_recentTopics.size() - 160;
@@ -692,7 +696,8 @@ void life_start() {
   esp_sntp_setservername(0, "ntp.aliyuncs.com");
   esp_sntp_setservername(1, "pool.ntp.org");
   esp_sntp_init();
-  if (xTaskCreate(life_task, "laap_life", 12288, nullptr, 2, nullptr) != pdPASS) {
+  // 栈 16KB：speak 链在心跳任务内展开（pcm[1152*2]=4.6KB + MP3 解码内部 ~2KB + LLM 链残留）
+  if (xTaskCreate(life_task, "laap_life", 16384, nullptr, 2, nullptr) != pdPASS) {
     ESP_LOGE(TAG, "心跳任务创建失败（意识停摆，宿主对话不受影响）");
   }
 }

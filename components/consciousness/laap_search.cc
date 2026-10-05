@@ -136,11 +136,12 @@ std::string LaapSearch::search_ddg(const std::string& q, int maxHit, int maxLen,
   std::string url = "https://api.duckduckgo.com/?q=" + url_encode(q) + "&format=json&no_html=1";
   std::string body;
   if (!http_get(url, budgetMs, 24576, body)) { lastError = "DDG连接失败"; s_ddgFail++; s_ddgSkipMs = now_ms(); return ""; }
-  // AbstractText 优先
+  // AbstractText 优先（字面量 "\"AbstractText\":\"" 长 16 字节——差一字节会让 v 以引号
+  // 开头、ve>2 恒假，DDG 永远"无结果"：审计 2026-10-05）
   std::string out;
   size_t ai = body.find("\"AbstractText\":\"");
   if (ai != std::string::npos) {
-    std::string v = body.substr(ai + 15);
+    std::string v = body.substr(ai + 16);
     size_t ve = v.find('"');
     if (ve != std::string::npos && ve > 2) out = v.substr(0, ve);
   }

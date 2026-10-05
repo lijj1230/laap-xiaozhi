@@ -139,15 +139,10 @@ bool MemorySystem::begin() {
 // ================= append（残尾检查+清洗+写失败不计数，v3.76e 语义） =================
 void MemorySystem::appendEpisodic(const char* role, const std::string& rawText) {
   // 残尾检查：上次断电的无换行半行会让本条拼接成损坏行
+  // （fs_last_char 只读末 1 字节——原全文件读每条消息 70KB+，心跳任务高频路径）
   {
-    size_t sz = fs_size(EP_PATH);
-    if (sz > 0) {
-      std::string all;
-      if (fs_read(EP_PATH, all) && !all.empty() && all.back() != '\n') {
-        std::string nl = "\n";
-        fs_append(EP_PATH, nl);
-      }
-    }
+    if (fs_size(EP_PATH) > 0 && fs_last_char(EP_PATH) != '\n')
+      fs_append(EP_PATH, "\n");
   }
   std::string text = sanitize_utf8(rawText);
   time_t now = time(nullptr);
@@ -732,23 +727,37 @@ void MemorySystem::applyTidyOps(const std::string& opsJson) {
   count_ = kept;
 
   // 向量缓存同步压缩；对不上整份作废
+  // （emb.bin 满容 1.2MB：全量读/写进内部堆必失败——FILE* 流式过滤重写）
   bool aligned = false;
   if ((int)embCount_ == total) {
-    std::string emb;
-    if (fs_read(EMB_PATH, emb) && emb.size() == (size_t)(total * EMB_DIM * 4)) {
-      std::string eout;
+    FILE* src = fopen("/conscious/mem/emb.bin", "rb");
+    FILE* dst = fopen("/conscious/mem/emb.bin.tmp", "wb");
+    if (src && dst) {
+      std::vector<char> vec(EMB_DIM * 4);
       int idx = 0, keptv = 0;
-      for (int i = 0; i < total; i++) {
+      bool ok = true;
+      while (idx < total) {
+        if (fread(vec.data(), 1, EMB_DIM * 4, src) != (size_t)(EMB_DIM * 4)) { ok = false; break; }
+        if (!del[idx] &&
+            fwrite(vec.data(), 1, EMB_DIM * 4, dst) != (size_t)(EMB_DIM * 4)) { ok = false; break; }
+        if (!del[idx]) keptv++;
         idx++;
-        if (del[i]) continue;
-        eout.append(emb, (size_t)i * EMB_DIM * 4, (size_t)EMB_DIM * 4);
-        keptv++;
       }
-      if (keptv == kept) {
-        fs_write(EMB_PATH, eout);
-        embCount_ = keptv;
-        aligned = true;
+      fclose(src);
+      fclose(dst);
+      if (ok && idx == total && keptv == kept) {
+        remove("/conscious/mem/emb.bin");
+        if (rename("/conscious/mem/emb.bin.tmp", "/conscious/mem/emb.bin") == 0) {
+          embCount_ = keptv;
+          aligned = true;
+        }
+      } else {
+        remove("/conscious/mem/emb.bin.tmp");
       }
+    } else {
+      if (src) fclose(src);
+      if (dst) fclose(dst);
+      remove("/conscious/mem/emb.bin.tmp");
     }
   }
   if (!aligned) { fs_remove(EMB_PATH); embCount_ = 0; }
@@ -765,12 +774,19 @@ float MemorySystem::noveltyOf(const std::string& text) {
   if (call_embedding(text, qv)) {
     embFail_ = 0;
     float maxCos = 0;
-    std::string emb;
-    if (fs_read(EMB_PATH, emb)) {
-      for (size_t off = 0; off + (size_t)(EMB_DIM * 4) <= emb.size(); off += (size_t)(EMB_DIM * 4)) {
-        float c = cosine_of(qv, (const float*)(emb.data() + off), EMB_DIM);
-        if (c > maxCos) maxCos = c;
+    // emb.bin 满容 300 条 × 4KB = 1.2MB：fs_read 全量进内部堆必分配失败——
+    // 与 recallSmart 同款 FILE* 流式逐向量读（审计 2026-10-05）
+    FILE* ef = fopen("/conscious/mem/emb.bin", "rb");
+    if (ef) {
+      float* rv = (float*)malloc(EMB_DIM * 4);
+      if (rv) {
+        while (fread(rv, 1, EMB_DIM * 4, ef) == (size_t)(EMB_DIM * 4)) {
+          float c = cosine_of(qv, rv, EMB_DIM);
+          if (c > maxCos) maxCos = c;
+        }
+        free(rv);
       }
+      fclose(ef);
     }
     novelty = 1.0f - maxCos;
     if (novelty < 0) novelty = 0;

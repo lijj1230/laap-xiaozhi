@@ -67,7 +67,8 @@ bool LaapRules::apply(const std::string& llmOutput) {
       while (d < ln.size() && ln[d] >= '0' && ln[d] <= '9') d++;
       if (d > 0 && d < ln.size() && d <= 3 &&
           (ln[d] == '.' || ln[d] == (char)0xE3 /*、*/ || ln[d] == ')')) {
-        ln = ln.substr(d + 1);
+        // 顿号'、'=3 字节（E3 80 81）：只剥首字节会剩孤立续字节开头的半截字符
+        ln = ln.substr(d + ((unsigned char)ln[d] == 0xE3 ? 3 : 1));
       }
     }
     else if ((unsigned char)ln[0] == 0xE2 && ln.size() > 3) { ln = ln.substr(3); }   // ① 等 U+2000-2FFF 3B 起
