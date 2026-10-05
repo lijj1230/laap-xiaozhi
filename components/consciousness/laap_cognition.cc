@@ -41,6 +41,7 @@ bool Cognition::loadEvolution() {
   n_.security   = grab("nSe", 0.20f);
   n_.expression = grab("nEx", 0.35f);
   pleasure_     = grab("pl",  0.5f);
+  trust         = grab("trust", 0.60f);   // M5：信任跨重启连续（关系是长期的）
   savedN_ = n_; savedPl_ = pleasure_;
   return true;
 }
@@ -54,10 +55,10 @@ void Cognition::saveEvolution(bool force) {
   char buf[256];
   snprintf(buf, sizeof(buf),
            "{\"gen\":%lu,\"cycles\":%lu,\"chats\":%lu,\"open\":%.3f,\"soc\":%.3f,\"sens\":%.3f,"
-           "\"nE\":%.3f,\"nC\":%.3f,\"nSo\":%.3f,\"nSe\":%.3f,\"nEx\":%.3f,\"pl\":%.3f}",
+           "\"nE\":%.3f,\"nC\":%.3f,\"nSo\":%.3f,\"nSe\":%.3f,\"nEx\":%.3f,\"pl\":%.3f,\"trust\":%.3f}",
            (unsigned long)gen_, (unsigned long)cycles_, (unsigned long)chats_,
            openness_, sociability_, sensitivity_,
-           n_.energy, n_.curiosity, n_.social, n_.security, n_.expression, pleasure_);
+           n_.energy, n_.curiosity, n_.social, n_.security, n_.expression, pleasure_, trust);
   fs_write("/evolution.json", buf);   // laap_fs_write 内部 tmp+rename 原子写
   savedN_ = n_; savedPl_ = pleasure_;
 }

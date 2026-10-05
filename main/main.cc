@@ -17,6 +17,7 @@ namespace laap {
 bool consciousness_init();
 const char* consciousness_status_line();
 void laap_tts_set_output(std::function<void(std::vector<int16_t>&)>);
+void life_set_host_busy(bool (*fn)());
 }
 
 #include "application.h"
@@ -48,6 +49,13 @@ extern "C" void app_main(void)
             Board::GetInstance().GetAudioCodec()->OutputData(data);
         });
     }
+
+    // 注入宿主忙闲探测：意识心跳在宿主对话/播报时让路（双声道互斥，M5 门禁）
+    laap::life_set_host_busy([]() {
+        auto s = Application::GetInstance().GetDeviceState();
+        return s == kDeviceStateSpeaking || s == kDeviceStateListening ||
+               s == kDeviceStateNotifying;
+    });
 
     // Initialize and run the application
     auto& app = Application::GetInstance();

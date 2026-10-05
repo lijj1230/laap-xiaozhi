@@ -10,6 +10,8 @@ static const size_t RULE_BYTES = 90;   // ≈30 个汉字（UTF-8 3B/字）
 
 namespace laap {
 
+LaapRules rules;   // 全局实例（头文件 extern 声明；M5 心跳注入系统提示词首次使用）
+
 void LaapRules::ensureLoaded() {
   if (loaded_) return;
   loaded_ = true;

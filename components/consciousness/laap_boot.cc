@@ -7,6 +7,7 @@
 #include "laap_memory.h"
 #include "laap_skills.h"
 #include "laap_rules.h"
+#include "laap_life.h"
 #include <esp_log.h>
 #include <cstdio>
 
@@ -28,6 +29,7 @@ bool consciousness_init() {
            (unsigned long)mind.generation(), (unsigned)memory.count(),
            cfg.llmKey.empty() ? "无Key" : cfg.llmModel.c_str(),
            laapSearch.available() ? "就绪" : "离线");
+  life_start();          // M5：黑匣子 + SNTP + 意识心跳任务（挂载失败不启动，避免半态写盘）
   return true;
 }
 
