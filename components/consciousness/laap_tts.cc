@@ -78,7 +78,8 @@ static size_t s_mp3Len = 0;
 
 static void mp3_reset() { s_mp3Len = 0; }
 
-static bool mp3_feed_play(HMP3Decoder dec, const uint8_t* data, size_t len, bool& interrupted) {
+static bool mp3_feed_play(HMP3Decoder dec, const uint8_t* data, size_t len, bool& interrupted,
+                          const AudioOutFn& out) {
   uint8_t* bufp = mp3_buf();
   if (!bufp) return false;
   if (s_mp3Len + len > MP3_BUF_SIZE) {   // 满：先播腾
@@ -92,6 +93,7 @@ static bool mp3_feed_play(HMP3Decoder dec, const uint8_t* data, size_t len, bool
 
   bool any = false;
   int pos = 0;
+  short pcm[1152 * 2];                   // MAX_NSAMP×2 声道上限（libhelix 规格内）
   while (pos + 4 < (int)s_mp3Len) {
     if (stopReq_) { interrupted = true; break; }
     int off = MP3FindSyncWord(bufp + pos, s_mp3Len - pos);
@@ -99,14 +101,13 @@ static bool mp3_feed_play(HMP3Decoder dec, const uint8_t* data, size_t len, bool
     pos += off;
     int bytesLeft = (int)(s_mp3Len - pos);
     MP3FrameInfo fi;
-    int er = MP3Decode(dec, (unsigned char**)&(bufp[pos]), &bytesLeft, nullptr, 0);
+    int er = MP3Decode(dec, (unsigned char**)&(bufp[pos]), &bytesLeft, pcm, 0);
     if (er) { pos += 1; continue; }
     MP3GetLastFrameInfo(dec, &fi);
-    // fi.outputSamps = 采样数*声道；24kHz 单声道直写
-    short* pcm = MP3GetSampBufferPtr(dec);
-    if (fi.outputSamps > 0 && laapTts.out_) {
-      std::vector<int16_t> out(pcm, pcm + fi.outputSamps);
-      laapTts.out_(out);
+    // fi.outputSamps = 采样数×声道；24kHz 单声道直写 codec
+    if (fi.outputSamps > 0 && out) {
+      std::vector<int16_t> outv(pcm, pcm + fi.outputSamps);
+      out(outv);
       any = true;
     }
     pos += bytesLeft;
@@ -136,6 +137,10 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
   wsConf.buffer_size = 8192;
   wsConf.network_timeout_ms = 10000;
   wsConf.keep_alive_enable = false;
+  extern void laap_ws_event_hook(void* event_data);   // 见文件尾：全局数据泵 hook
+  wsConf.event_handler = [](void* arg, esp_event_base_t base, int32_t id, void* event_data) {
+    if (id == WEBSOCKET_EVENT_DATA) laap_ws_event_hook(event_data);
+  };
   esp_websocket_client_handle_t ws = esp_websocket_client_init(&wsConf);
   if (!ws) { speaking_ = false; lastError = "ws init 失败"; return false; }
   esp_websocket_client_set_headers(ws,
@@ -186,29 +191,34 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
   bool ok = false, turnEnd = false, interrupted = false;
   uint32_t lastProgress = now_ms();
 
+  // 收流：IDF ws 客户端是事件驱动（WEBSOCKET_EVENT_DATA 在 ws 任务送达）——
+  // 用全局单槽泵 hook 接数据（同一时间只有一个 TTS 会话，speaking_ 互斥保证），
+  // 本任务 50ms 轮询消费。文本帧判据=op_code 0x1；二进制帧=MP3 块（2B 大端头长）
+  static uint8_t s_rbuf[12288];
+  static volatile int s_rlen = 0;
+  static volatile bool s_isText = false;
+  static std::function<void(esp_websocket_event_data_t*)> s_pump;
+  s_pump = [&](esp_websocket_event_data_t* ev) {
+    if (!ev || !ev->data_ptr || ev->data_len <= 0 || s_rlen > 0) return;   // 未消费就丢帧（看门狗兜底）
+    int n = ev->data_len;
+    if (n > (int)sizeof(s_rbuf)) n = sizeof(s_rbuf);
+    memcpy((void*)s_rbuf, ev->data_ptr, n);
+    s_rlen = n;
+    s_isText = (ev->op_code == 0x1);
+  };
+  // 把本会话泵挂到全局 hook（esp_websocket_client 无 per-client 事件用户数据透传给
+  // 静态函数的通道；全局 hook 由 laap_ws_event_hook 在事件回调里调用）
+  extern std::function<void(esp_websocket_event_data_t*)> g_laap_ws_hook;
+  g_laap_ws_hook = &s_pump;
+
   while (!turnEnd && !interrupted) {
+    if (stopReq_) { interrupted = true; break; }
     if (now_ms() - lastProgress > 30000) { lastError = "30s 无进展超时"; break; }
-    esp_websocket_event_data_t ev = {};
-    // 轮询读帧：用 timeout=100ms 的 receive（IDF ws 无 poll，借 wait_for 数据事件）
-    int len = esp_websocket_client_receive(ws, nullptr, 0, pdMS_TO_TICKS(100));
-    (void)len;
-    // 事件驱动数据在 receive 返回后经 esp_websocket_client_get_data? IDF5/6 用 read 路径：
-    static uint8_t rbuf[8192];
-    int rl = esp_websocket_client_receive(ws, rbuf, sizeof(rbuf), pdMS_TO_TICKS(1000));
-    if (rl <= 0) continue;
-    bool isText = false;
-    const uint8_t* data = (const uint8_t*)rbuf;
-    int dlen = rl;
-    // esp_websocket_client_receive 返回 payload；op_code 需从事件上下文取——
-    // 简化判定：文本帧必含 "Path:"；二进制 MP3 块头两字节为大端头长
-    {
-      // Path: 文本帧判定（看前 64B 是否含 "Path:"）
-      int probe = dlen < 64 ? dlen : 64;
-      for (int i = 0; i + 5 < probe; i++) {
-        if (memcmp(data + i, "Path:", 5) == 0) { isText = true; break; }
-      }
-    }
-    if (isText) {
+    if (s_rlen <= 0) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
+    int dlen = s_rlen;
+    s_rlen = 0;
+    const uint8_t* data = s_rbuf;
+    if (s_isText) {
       std::string text((const char*)data, dlen);
       if (text.find("Path:ping") != std::string::npos) {
         std::string pong = "X-RequestId:" + cid + "\r\nContent-Type:application/json; charset=utf-8\r\nPath:pong\r\n\r\n";
@@ -222,9 +232,10 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
       size_t hdrLen = ((size_t)data[0] << 8) | data[1];
       if ((int)hdrLen + 2 > dlen) continue;
       lastProgress = now_ms();
-      if (mp3_feed_play(dec, data + hdrLen + 2, dlen - hdrLen - 2, interrupted)) ok = true;
+      if (mp3_feed_play(dec, data + hdrLen + 2, dlen - hdrLen - 2, interrupted, out_)) ok = true;
     }
   }
+  g_laap_ws_hook = nullptr;
   if (dec) MP3FreeDecoder(dec);
   esp_websocket_client_stop(ws);
   esp_websocket_client_destroy(ws);
@@ -232,6 +243,13 @@ bool LaapTts::speak(const std::string& text, const std::string& voice, const std
   if (interrupted) return true;   // 打断算成功（说了半截）
   if (!ok && lastError.empty()) lastError = "未收到音频";
   return ok;
+}
+
+// 全局 WS 事件钩子（laap_ws_event_hook 由本组件的 ws 事件处理器调用）
+std::function<void(esp_websocket_event_data_t*)> g_laap_ws_hook = nullptr;
+
+extern "C" void laap_ws_event_hook(void* event_data) {
+  if (g_laap_ws_hook) g_laap_ws_hook((esp_websocket_event_data_t*)event_data);
 }
 
 void LaapTts::stop() { stopReq_ = true; }
