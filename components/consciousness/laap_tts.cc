@@ -2,7 +2,7 @@
 #include <esp_log.h>
 #include <esp_http_client.h>
 #include <esp_websocket_client.h>
-#include <mbedtls/sha256.h>
+#include "laap_sha256.h"
 #include <esp_timer.h>
 #include <time.h>
 #include <cstring>
@@ -53,11 +53,7 @@ static std::string gen_sec_ms_gec() {
   }
   in += TCT;
   uint8_t hash[32];
-  mbedtls_sha256((const uint8_t*)in.c_str(), in.length(), hash, 0);
-  char hex[65];
-  for (int k = 0; k < 32; k++) sprintf(hex + k * 2, "%02X", hash[k]);
-  hex[64] = 0;
-  return std::string(hex);
+  return sha256_hex_upper(in);
 }
 
 static std::string js_date() {
