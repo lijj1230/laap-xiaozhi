@@ -275,8 +275,11 @@ float Cognition::dominance() const {
   float c = n_.curiosity * (0.6f + (openness_ < 0.6f ? openness_ : 0.6f));
   float s = n_.social * (0.6f + (sociability_ < 0.6f ? sociability_ : 0.6f));
   float sec = n_.security * (0.6f + (sensitivity_ < 0.6f ? sensitivity_ : 0.6f));
-  float m = n_.energy; if (n_.expression > m) m = n_.expression;
-  if (c > m) m = c; if (s > m) m = s; if (sec > m) m = sec;
+  float m = n_.energy;
+  if (n_.expression > m) m = n_.expression;
+  if (c > m) m = c;
+  if (s > m) m = s;
+  if (sec > m) m = sec;
   return m;
 }
 

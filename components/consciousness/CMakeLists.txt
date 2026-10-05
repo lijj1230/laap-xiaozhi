@@ -7,5 +7,5 @@ idf_component_register(
          "laap_cognition.cc"
          "laap_rules.cc"
     INCLUDE_DIRS "."
-    REQUIRES nvs_flash esp_timer esp_littlefs
+    REQUIRES nvs_flash esp_timer joltwallet__littlefs
 )
