@@ -44,6 +44,7 @@
 
 #include "coder.h"
 #include "assembly.h"
+#include "pgmspace_compat.h"
 // IDF6：pgmspace 已废除（PROGMEM 表按普通 const 访问）
 
 #define COS0_0  0x4013c251	/* Q31 */

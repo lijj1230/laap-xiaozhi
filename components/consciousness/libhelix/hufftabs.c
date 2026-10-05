@@ -43,6 +43,7 @@
 // IDF6：pgmspace 已废除（PROGMEM 表按普通 const 访问）
 
 #include "coder.h"
+#include "pgmspace_compat.h"
 
 /*  NOTE - regenerated tables to use shorts instead of ints
           (all needed data can fit in 16 bits - see below)

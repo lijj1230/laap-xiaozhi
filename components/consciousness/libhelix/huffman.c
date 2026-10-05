@@ -42,6 +42,7 @@
  **************************************************************************************/
 
 #include "coder.h"
+#include "pgmspace_compat.h"
 #define PGM_READ_UNALIGNED 0 // Only support aligned reads, faster
 // IDF6：pgmspace 已废除（PROGMEM 表按普通 const 访问）
 

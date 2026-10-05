@@ -44,6 +44,7 @@
 // constants in RAM are not significantly faster
 
 #include "coder.h"
+#include "pgmspace_compat.h"
 // IDF6：pgmspace 已废除（PROGMEM 表按普通 const 访问）
 
 #pragma GCC diagnostic push

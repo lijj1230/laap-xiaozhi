@@ -43,6 +43,7 @@
 
 #include "coder.h"
 #include "assembly.h"
+#include "pgmspace_compat.h"
 // IDF6：pgmspace 已废除（PROGMEM 表按普通 const 访问）
 
 typedef int ARRAY3[3];	/* for short-block reordering */

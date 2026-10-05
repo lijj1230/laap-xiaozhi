@@ -42,6 +42,7 @@
  **************************************************************************************/
 
 #include <stdint.h>
+#include "pgmspace_compat.h"
 #define Word64 uint64_t
 
 #ifndef _MP3DEC_H
