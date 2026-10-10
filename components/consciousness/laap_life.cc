@@ -39,9 +39,12 @@ static const int QUIET_START = 23, QUIET_END = 6;   // 静音窗
 static const char* TTS_VOICE = "zh-CN-XiaoxiaoNeural";
 static const TickType_t BEAT = pdMS_TO_TICKS(10000);  // 10s 心跳拍
 
-// ---- 单一写者原则：意识态只在本任务读写；旁听入口只入队 ----
+// ---- 单一写者原则：意识态只在本任务读写；外部请求只入队/拷贝 ----
 static std::mutex s_noteMux;
-static std::deque<std::pair<uint8_t, std::string>> s_notes;  // 0=主人 1=云端回复
+// 队列元素：0=主人话 1=云端回复（旧账本）；2=记忆强化 3=教技能 4=规则落盘 5=新意图
+static std::deque<std::pair<uint8_t, std::string>> s_notes;
+// 记账用的成对转发缓冲（主人话先到、回复后到——凑成一对再落账，进化/信任按完整轮算）
+static std::string s_pairUser, s_pairAssistant;
 static HostBusyFn s_hostBusy = nullptr;
 static uint8_t s_llmFailStreak = 0;          // 连败退避（表达/独白让路）
 static bool s_sawUserSinceExp = false;       // 预期武装后有无对话动静（无传感器近似）
@@ -49,21 +52,74 @@ static size_t s_lastUserLen = 0;             // 最近的用户话语长度（�
 static std::string s_recentTopics;           // 独白主题环（断"自己喂自己"）
 static uint8_t s_monoSeq = 0, s_goalStreak = 0;  // 意图交替节拍
 static int s_lastReflectDay = -1;
+// 状态快照互斥：心跳任务更新（写者），MCP 回调读（拷贝）
+static std::mutex s_snapMux;
+static std::string s_statusSnap = "{}";
 
 void life_set_host_busy(HostBusyFn fn) { s_hostBusy = fn; }
 
-void life_note_user(const std::string& text) {
-  if (text.empty()) return;
+static void enqueue_note(uint8_t kind, const std::string& text) {
   std::lock_guard<std::mutex> g(s_noteMux);
   if (s_notes.size() >= 24) s_notes.pop_front();   // 积压保护：丢最旧
-  s_notes.emplace_back(0, text);
+  s_notes.emplace_back(kind, text);
 }
 
-void life_note_assistant(const std::string& text) {
-  if (text.empty()) return;
-  std::lock_guard<std::mutex> g(s_noteMux);
-  if (s_notes.size() >= 24) s_notes.pop_front();
-  s_notes.emplace_back(1, text);
+// ============================================================
+// MCP 工具接口（回调在协议任务上下文；只入队/拷贝，绝不写意识态）
+// ============================================================
+void life_note_conversation(const std::string& userText, const std::string& assistantText) {
+  // 成对转发：宿主把一轮对话拆两条调（user 先 assistant 后）或合并一条都支持
+  if (!userText.empty()) {
+    std::lock_guard<std::mutex> g(s_noteMux);
+    if (!s_pairUser.empty()) {   // 上一条 user 没等到回复：先落账再覆盖（丢回复比丢话好）
+      if (s_notes.size() >= 24) s_notes.pop_front();
+      s_notes.emplace_back(0, s_pairUser);
+    }
+    s_pairUser = userText;
+    if (assistantText.empty()) return;
+  }
+  std::string user = userText, assist = assistantText;
+  {   // 配对取出
+    std::lock_guard<std::mutex> g(s_noteMux);
+    if (user.empty() && !s_pairAssistant.empty()) return;   // 连续两条回复：取当前对
+    if (user.empty()) user = s_pairUser;                     // 只有 assistant 到达
+    s_pairUser.clear();
+  }
+  enqueue_note(0, user);
+  if (!assist.empty()) enqueue_note(1, assist);
+}
+
+std::string life_status_snapshot() {
+  std::lock_guard<std::mutex> g(s_snapMux);
+  return s_statusSnap;
+}
+
+std::string life_recall(const std::string& query, int maxChars) {
+  // read-only 召回（含关键词退通道；allowNet=false 防协议任务里同步 embedding 卡 12s）
+  return memory.recallSmart(utf8_cut(query, 24), maxChars > 100 ? maxChars : 200, false);
+}
+
+bool life_remember(const std::string& fragment) {
+  // 记忆强化无网络、纯文件操作，且只上调权重不重构行序——在回调里直接做安全；
+  // 但为守住"意识盘单一写者"仍入队给心跳执行
+  enqueue_note(2, utf8_cut(fragment, 60));
+  return true;
+}
+
+bool life_teach_skill(const std::string& trigger, const std::string& instruction) {
+  enqueue_note(3, trigger + "|" + utf8_cut(instruction, 90));
+  return true;
+}
+
+int life_apply_rules(const std::string& rulesText) {
+  if (rulesText.empty()) return 0;
+  int applied = rules.apply(rulesText);   // rules.apply 自带"无变化不写盘"，懒加载缓存
+  return applied ? 1 : 0;
+}
+
+bool life_add_intent(const std::string& text) {
+  enqueue_note(5, utf8_cut(text, 60));
+  return true;
 }
 
 // ============================================================
@@ -487,14 +543,16 @@ static void drain_notes() {
       text = std::move(s_notes.front().second);
       s_notes.pop_front();
     }
-    if (kind == 0) {   // 主人说了话
+    switch (kind) {
+    case 0:   // 主人说了话
       mind.onUserInteraction();
       skills.hit(text);
       memory.logEvent("user", text);
       s_sawUserSinceExp = true;
       s_lastUserLen = text.size();
       maybe_teach(text);
-    } else {           // 云端回复（小智主对话仍走云，设备侧只旁听记账）
+      break;
+    case 1:   // 云端回复（宿主转发；意识链的自有表达不走这条路）
       memory.logEvent("aris", text);
       if (s_lastUserLen) {   // 一次完整的"主人问-它答"闭环：进化 + 信任微升
         mind.evolveAfterChat((int)s_lastUserLen);
@@ -502,6 +560,31 @@ static void drain_notes() {
         s_lastUserLen = 0;
       }
       s_sawUserSinceExp = true;
+      break;
+    case 2:   // MCP：记忆强化
+      memory.rememberBoost(text);
+      memory.logEvent("event", "【主人要我记住】" + text);
+      break;
+    case 3: { // MCP：教技能（宿主 LLM 已解析 触发词|指令）
+      size_t bar = text.find('|');
+      if (bar != std::string::npos) {
+        std::string trig = text.substr(0, bar), instr = text.substr(bar + 1);
+        if (!skills.teach(trig, instr))
+          ESP_LOGW(TAG, "MCP 教技能不合规：「%s」", text.c_str());
+        else
+          ESP_LOGI(TAG, "MCP 已学会：说「%s」→ %s", trig.c_str(), instr.c_str());
+      }
+      break;
+    }
+    case 4:   // MCP：规则落盘（保留类型位以防直接调用；当前走 life_apply_rules）
+      rules.apply(text);
+      break;
+    case 5:   // MCP：新目标
+      if (mind.addIntent(text, (uint32_t)time(nullptr)))
+        ESP_LOGI(TAG, "MCP 新目标：「%s」", text.c_str());
+      break;
+    default:
+      break;
     }
   }
 }
@@ -675,6 +758,20 @@ static void life_task(void*) {
       }
     }
     mind.saveEvolution();   // 内部节流：脏或满 96 周期才落盘
+    // ---- MCP 状态快照刷新（MCP 回调读这份拷贝，见 life_status_snapshot）----
+    {
+      std::string snap = mind.worldJson();
+      // 去尾花括号补记忆条数/搜索能力（worldJson 是意识自述，工具输出补宿主关心的字段）
+      if (!snap.empty() && snap.back() == '}') {
+        snap.pop_back();
+        char extra[80];
+        snprintf(extra, sizeof(extra), ",\"memory_count\":%u,\"search\":%s}",
+                 (unsigned)memory.count(), laapSearch.available() ? "true" : "false");
+        snap += extra;
+      }
+      std::lock_guard<std::mutex> g(s_snapMux);
+      s_statusSnap = snap;
+    }
   }
 }
 

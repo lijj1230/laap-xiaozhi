@@ -19,6 +19,7 @@ const char* consciousness_status_line();
 void laap_tts_set_output(std::function<void(std::vector<int16_t>&)>);
 void life_set_host_busy(bool (*fn)());
 }
+void laap_register_consciousness_tools();   // main/laap_mcp_tools.cc：意识工具注册进宿主 MCP
 
 #include "application.h"
 
@@ -56,6 +57,9 @@ extern "C" void app_main(void)
         return s == kDeviceStateSpeaking || s == kDeviceStateListening ||
                s == kDeviceStateNotifying;
     });
+
+    // 意识能力注册为 MCP 工具（xiaozhi.me 云端 LLM 经协议通道调用）
+    laap_register_consciousness_tools();
 
     // Initialize and run the application
     auto& app = Application::GetInstance();

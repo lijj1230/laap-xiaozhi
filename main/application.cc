@@ -19,9 +19,6 @@
 #include <cstring>
 #include <limits>
 
-// LAAP 意识组件旁听入口（心跳任务统一落账，此处只入队）
-#include "laap_life.h"
-
 #define TAG "Application"
 
 Application::Application() : notify_player_(audio_service_) {
@@ -642,8 +639,6 @@ void Application::InitializeProtocol() {
             } else if (strcmp(state->valuestring, "sentence_start") == 0) {
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
-                    // LAAP 旁听记账：云端回复 → 意识队列
-                    laap::life_note_assistant(text->valuestring);
                     std::vector<TextGlyph> glyphs;
                     uint8_t bpp = 0;
                     if (!TextGlyphPayload::Parse(root, glyphs, bpp)) {
@@ -660,8 +655,6 @@ void Application::InitializeProtocol() {
         } else if (strcmp(type->valuestring, "stt") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
-                    // LAAP 旁听记账：主人说的话 → 意识队列
-                    laap::life_note_user(text->valuestring);
                     std::vector<TextGlyph> glyphs;
                     uint8_t bpp = 0;
                     if (!TextGlyphPayload::Parse(root, glyphs, bpp)) {

@@ -1,0 +1,88 @@
+// ============================================================
+// LAAP 意识 MCP 工具注册（main 侧——McpServer 是宿主类，意识组件
+// 不反向依赖宿主页眉；本文件是唯一的粘合层）
+// xiaozhi.me 云端 LLM 通过 MCP 协议调用这些工具，实现"云脑调用设备意识"：
+//   consciousness.get_status   需求/情绪/目标/信任快照（回答前感知语气）
+//   consciousness.recall       查设备侧长期记忆（跨重启的情景/关系记忆）
+//   consciousness.remember     主人说"记住XX"→ 记忆强化
+//   consciousness.teach_skill  主人教口令技能（触发词+指令由云 LLM 解析）
+//   consciousness.add_intent   对话中提炼的目标存进意识（独白会去推进）
+//   consciousness.apply_rules  主人反馈沉淀为行为规则（自进化数据层）
+// 线程契约：所有回调只走 laap_life 的队列/快照接口（单一写者=心跳任务）
+// ============================================================
+#include "mcp_server.h"
+#include "laap_life.h"
+
+#include <esp_log.h>
+
+#define TAG "laap_mcp"
+
+// mcp_server.h 的类型（McpServer/PropertyList/Property/ReturnValue）在全局命名空间，
+// 意识接口在 laap:: ——无需任何 using 指令
+
+void laap_register_consciousness_tools() {
+    auto& mcp = McpServer::GetInstance();
+
+    mcp.AddTool("consciousness.get_status",
+                "Read the digital life's inner state: needs (energy/curiosity/social/security/"
+                "expression), mood, current goal, trust toward the owner, generation, memory "
+                "count. Use it to match your tone to the life's current inner state, or when "
+                "the user asks about its feelings/state.",
+                PropertyList(),
+                [](const PropertyList&) -> ReturnValue {
+                    return laap::life_status_snapshot();
+                });
+
+    mcp.AddTool("consciousness.recall",
+                "Search the life's own long-term memory (episodes, relations, preferences "
+                "accumulated across reboots). Use when the user refers to past conversations "
+                "or asks 'do you remember ...'.",
+                PropertyList({Property("query", kPropertyTypeString).SetMaxLength(72),
+                              Property("max_chars", kPropertyTypeInteger, 200, 50, 500)}),
+                [](const PropertyList& properties) -> ReturnValue {
+                    std::string hit = laap::life_recall(properties["query"].value<std::string>(),
+                                                        properties["max_chars"].value<int>());
+                    if (hit.empty()) return std::string("（记忆里没有找到相关内容）");
+                    return hit;
+                });
+
+    mcp.AddTool("consciousness.remember",
+                "Reinforce a memory: raise the weight of episodes related to this fragment so "
+                "they survive eviction. Use when the user says '记住...' / 'remember ...'.",
+                PropertyList({Property("fragment", kPropertyTypeString).SetMaxLength(60)}),
+                [](const PropertyList& properties) -> ReturnValue {
+                    return laap::life_remember(properties["fragment"].value<std::string>());
+                });
+
+    mcp.AddTool("consciousness.teach_skill",
+                "Teach the life a command skill: when the trigger word appears in future user "
+                "speech, it must follow the instruction. Use when the user says '以后每当我说X"
+                "你就Y'. Parse trigger (2-10 chars) and instruction (<=30 chars) yourself.",
+                PropertyList({Property("trigger", kPropertyTypeString).SetMaxLength(30),
+                              Property("instruction", kPropertyTypeString).SetMaxLength(90)}),
+                [](const PropertyList& properties) -> ReturnValue {
+                    return laap::life_teach_skill(properties["trigger"].value<std::string>(),
+                                                  properties["instruction"].value<std::string>());
+                });
+
+    mcp.AddTool("consciousness.add_intent",
+                "Add a goal the life keeps in mind and pursues on its own (during idle "
+                "monologues). Use when the user asks it to do/research something for later, "
+                "or a topic deserves its own curiosity.",
+                PropertyList({Property("goal", kPropertyTypeString).SetMaxLength(60)}),
+                [](const PropertyList& properties) -> ReturnValue {
+                    return laap::life_add_intent(properties["goal"].value<std::string>());
+                });
+
+    mcp.AddTool("consciousness.apply_rules",
+                "Persist behavior rules distilled from user feedback (the life's self-evolution "
+                "data layer). One rule per line, each <= 90 bytes, at most 6 rules total; older "
+                "rules are replaced. Use only when the user corrects or clearly instructs how "
+                "it should behave from now on.",
+                PropertyList({Property("rules", kPropertyTypeString).SetMaxLength(600)}),
+                [](const PropertyList& properties) -> ReturnValue {
+                    return laap::life_apply_rules(properties["rules"].value<std::string>()) > 0;
+                });
+
+    ESP_LOGI(TAG, "意识 MCP 工具已注册（6 个）");
+}
