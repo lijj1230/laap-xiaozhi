@@ -9,6 +9,8 @@
 //   consciousness.add_intent   对话中提炼的目标存进意识（独白会去推进）
 //   consciousness.apply_rules  主人反馈沉淀为行为规则（自进化数据层）
 //   consciousness.log_turn     每轮对话转发进设备侧记忆（B 通道；与宿主旁听 A 通道去重并存）
+//   consciousness.night_review_context  晨间整理素材（编号情景记忆+关系+自我总结，只读）
+//   consciousness.night_review_apply    提交整理决定（删低质/改情绪标签/抽关系/新总结）
 //   self.web_search            设备侧联网搜索（必应 RSS；零云配额零 Key）
 // 线程契约：所有回调只走 laap_life 的队列/快照接口（单一写者=心跳任务）；
 // web_search 例外：就地同步 HTTP（协议任务本来就同步等工具结果，相机工具同模式）
@@ -110,6 +112,43 @@ void laap_register_consciousness_tools() {
                     return true;
                 });
 
+    mcp.AddTool("consciousness.night_review_context",
+                "Fetch the material for the life's morning memory reorganization (its 'dream'): "
+                "recent episodes each prefixed with its ABSOLUTE line number, its current "
+                "relations, and its self-summary. Read-only. The line numbers are exactly what "
+                "consciousness.night_review_apply expects. Call it when the injected morning "
+                "instruction asks you to tidy memories, or when the user asks you to review "
+                "your memories.",
+                PropertyList({Property("last_n", kPropertyTypeInteger, 30, 10, 60)}),
+                [](const PropertyList& properties) -> ReturnValue {
+                    return laap::life_review_context(properties["last_n"].value<int>());
+                });
+
+    mcp.AddTool("consciousness.night_review_apply",
+                "Submit the reorganization you decided during the morning reflection "
+                "(applied asynchronously in the heartbeat task). All parameters optional — "
+                "pass only what you want to change. mood_lines: one '<lineNo>|<mood>' per "
+                "line, mood must be one of calm/happy/curious/excited/lonely/anxious/tired. "
+                "tidy_ops: JSON array like [{\"n\":12,\"op\":\"del\"}] — delete ONLY clearly "
+                "worthless or duplicate lines, at most 12. relation_lines: one "
+                "'偏好|…' / '承诺|…' / '边界|…' per line about the owner. summary: a new "
+                "self-summary, max 60 chars.",
+                PropertyList({Property("mood_lines", kPropertyTypeString, std::string(""))
+                                  .SetMaxLength(400),
+                              Property("tidy_ops", kPropertyTypeString, std::string(""))
+                                  .SetMaxLength(400),
+                              Property("relation_lines", kPropertyTypeString, std::string(""))
+                                  .SetMaxLength(300),
+                              Property("summary", kPropertyTypeString, std::string(""))
+                                  .SetMaxLength(200)}),
+                [](const PropertyList& properties) -> ReturnValue {
+                    return laap::life_review_apply(
+                        properties["mood_lines"].value<std::string>(),
+                        properties["tidy_ops"].value<std::string>(),
+                        properties["relation_lines"].value<std::string>(),
+                        properties["summary"].value<std::string>());
+                });
+
     mcp.AddTool("self.web_search",
                 "Search the web FROM THE DEVICE itself (free, unlimited, no quota, no key) "
                 "using Bing news RSS. Use this tool whenever the reply needs fresh "
@@ -125,5 +164,5 @@ void laap_register_consciousness_tools() {
                     return hit;
                 });
 
-    ESP_LOGI(TAG, "意识 MCP 工具已注册（8 个）");
+    ESP_LOGI(TAG, "意识 MCP 工具已注册（10 个）");
 }

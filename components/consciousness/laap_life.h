@@ -38,4 +38,10 @@ bool life_teach_skill(const std::string& trigger, const std::string& instruction
 int life_apply_rules(const std::string& rulesText);
 bool life_add_intent(const std::string& text);
 
+// ---- 晨间反思（原版夜间任务链的 MCP 化：云 LLM 出判断，设备执行变更）----
+// 梦/睡时整理语义：心跳在清晨触发，云 LLM 调 context 取素材 → apply 提交变更
+std::string life_review_context(int lastN);   // 反思素材（只读；协议任务上下文安全）
+bool life_review_apply(const std::string& moodLines, const std::string& tidyOps,
+                       const std::string& relationLines, const std::string& summary);
+
 }  // namespace laap

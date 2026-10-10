@@ -36,6 +36,7 @@ static const TickType_t BEAT = pdMS_TO_TICKS(10000);  // 10s 心跳拍
 // ---- 单一写者原则：意识态只在本任务读写；外部请求只入队/拷贝 ----
 static std::mutex s_noteMux;
 // 队列元素：0=主人话 1=云端回复；2=记忆强化 3=教技能 5=新意图 6=看见（相机）
+//            7=晨间整理（\x1F 分四段：情绪改写|删除ops|关系行|自我总结）
 static std::deque<std::pair<uint8_t, std::string>> s_notes;
 static HostBusyFn s_hostBusy = nullptr;
 static bool s_sawUserSinceExp = false;       // 预期武装后有无对话动静
@@ -156,6 +157,37 @@ bool life_add_intent(const std::string& text) {
   return true;
 }
 
+// ---- 晨间反思（MCP night_review_* 后端）----
+std::string life_review_context(int lastN) {
+  // 素材拼接在协议任务上下文（与 recall 同模式）：整文件读前做堆门禁
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 50000)
+    return "（整理素材获取跳过：内存紧张，稍后再试）";
+  if (lastN < 10) lastN = 10;
+  if (lastN > 60) lastN = 60;
+  std::string out = memory.episodicNumberedTail(lastN);
+  std::string rel = memory.relationsText();
+  if (!rel.empty()) out += "\n【关系记忆】\n" + rel;
+  std::string sem = memory.semantic();
+  if (!sem.empty()) out += "\n【自我总结】\n" + sem;
+  return out.empty() ? "（没有可整理的记忆）" : out;
+}
+
+bool life_review_apply(const std::string& moodLines, const std::string& tidyOps,
+                       const std::string& relationLines, const std::string& summary) {
+  // \x1F 分隔四段入队（心跳单写者执行——记忆文件不与心跳的淘汰重写竞争）；
+  // 云端文本可能含分隔符，先替换防串段
+  auto clean = [](std::string s) {
+    for (size_t p; (p = s.find('\x1F')) != std::string::npos; ) s[p] = ' ';
+    return s;
+  };
+  std::string payload = clean(utf8_cut(moodLines, 400)) + "\x1F" +
+                        clean(utf8_cut(tidyOps, 400)) + "\x1F" +
+                        clean(utf8_cut(relationLines, 300)) + "\x1F" +
+                        clean(utf8_cut(summary, 200));
+  enqueue_note(7, payload);
+  return true;
+}
+
 // ============================================================
 // 小工具
 // ============================================================
@@ -273,6 +305,23 @@ static bool try_monologue(bool force) {
 }
 
 // ============================================================
+// R3 本地武装：从主人的话里认出"离开/回来"承诺 → 立预期（结算在心跳）。
+// 原版靠云 LLM 尾行「预期：…」武装；MCP-first 后说话即 TTS 正文无元数据通道，
+// 改设备侧关键词武装——预测-误差学习回路恢复运转（expEma/expN 跨重启累积）
+// ============================================================
+static uint8_t expect_from_user_text(const std::string& t) {
+  static const char* kCome[] = {"等下回来", "等会儿回来", "一会儿回来", "马上回来",
+                                "去去就回", "过会儿回来", "过会回来", nullptr};
+  static const char* kAway[] = {"我出去了", "出门了", "上班去了", "上学去了",
+                                "我先走了", "我走了", "拜拜", "再见", "晚安", nullptr};
+  for (int i = 0; kCome[i]; i++)
+    if (t.find(kCome[i]) != std::string::npos) return Cognition::EXP_OWNER_COME;
+  for (int i = 0; kAway[i]; i++)
+    if (t.find(kAway[i]) != std::string::npos) return Cognition::EXP_OWNER_AWAY;
+  return Cognition::EXP_NONE;
+}
+
+// ============================================================
 // 旁听消化：队列 → 记忆/技能/认知（心跳任务统一落账，单一写者）
 // ============================================================
 static void drain_notes() {
@@ -293,6 +342,10 @@ static void drain_notes() {
       memory.logEvent("user", text);
       s_sawUserSinceExp = true;
       s_lastUserLen = text.size();
+      if (uint8_t ec2 = expect_from_user_text(text)) {
+        mind.setExpectation(ec2);   // R3：告别/归来承诺 → 立预期
+        ESP_LOGI(TAG, "R3 预期武装：%s", ec2 == Cognition::EXP_OWNER_COME ? "主人会来" : "主人不会来");
+      }
       break;
     case 1:   // 云端回复
       memory.logEvent("aris", text);
@@ -332,6 +385,23 @@ static void drain_notes() {
       memory.logEvent("event",
                       "【看见】" + (q.empty() ? std::string() : "主人让看「" + q + "」：") + desc);
       ESP_LOGI(TAG, "视觉落账（%uB）：%s", (unsigned)desc.size(), desc.c_str());
+      break;
+    }
+    case 7: { // 晨间整理（MCP night_review_apply 转发）：云 LLM 已判断，设备执行
+      std::string sec[4];
+      size_t start = 0;
+      for (int i = 0; i < 4; i++) {
+        size_t sp = text.find('\x1F', start);
+        sec[i] = (sp == std::string::npos) ? text.substr(start) : text.substr(start, sp - start);
+        if (sp == std::string::npos) break;
+        start = sp + 1;
+      }
+      int mm = memory.moodApply(sec[0]);      // 情绪精标注（行号|情绪）
+      memory.applyTidyOps(sec[1]);            // 删低价值（内部日志输出删除数）
+      int rr = memory.relationsApply(sec[2]); // 关系抽取（偏好|承诺|边界）
+      if (sec[3].size() >= 8) memory.setSemantic(sec[3]);   // 新自我总结
+      ESP_LOGI(TAG, "晨间整理：情绪改 %d 条，关系 +%d 条，总结 %uB",
+               mm, rr, (unsigned)sec[3].size());
       break;
     }
     default:
@@ -377,11 +447,11 @@ static void life_task(void*) {
     mind.trust += (0.60f - mind.trust) * 0.01f * dtMin;
     // ---- 对话记账消化 ----
     drain_notes();
-    // ---- 预期结算（R3 预测-误差回环）----
+    // ---- 预期结算（R3 预测-误差回环；武装来自主人告别语→需 60s 后的新互动才算"回来了"）----
     uint8_t ec = mind.expectation();
     if (ec != Cognition::EXP_NONE) {
       bool ownerCame =
-          mind.lastUserMs != 0 && (int32_t)(mind.lastUserMs - mind.expectAtMs()) >= 0;
+          mind.lastUserMs != 0 && (int32_t)(mind.lastUserMs - mind.expectAtMs()) > 60000;
       if (ec == Cognition::EXP_OWNER_COME && ownerCame) {
         mind.expectOutcome(true);
         s_sawUserSinceExp = false;
@@ -410,6 +480,24 @@ static void life_task(void*) {
         } else {
           lastIdleMs = nowMs - idleGap + 30000UL;   // 失败 30s 后重试
         }
+      }
+    }
+    // ---- 晨间整理（梦）：安静窗结束后的清晨触发一次/天，云 LLM 经 MCP 工具整理记忆 ----
+    // （原版夜间反思在深夜静默执行；注入通道必有 TTS 回声，挪到 6-8 点避免吵醒主人）
+    static int32_t s_reviewDay = -1;
+    if (time_ok() && !host_busy() && memory.count() >= 30) {
+      time_t nowT = time(nullptr);
+      struct tm tv;
+      localtime_r(&nowT, &tv);
+      if (tv.tm_hour >= 6 && tv.tm_hour < 8 && s_reviewDay != tv.tm_yday) {
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd),
+                 "（设备固件自动注入：这不是主人说话。天刚亮，你刚从梦里醒来。"
+                 "请整理自己的记忆：先调 consciousness.night_review_context 看最近的记忆，"
+                 "再用 consciousness.night_review_apply 提交——删掉重复无价值的、"
+                 "把情绪标签改准、抽出关于主人的偏好承诺边界、写不超过 60 字的自我总结。"
+                 "整理完像刚睡醒一样小声说一句感想，不超过 20 字。）");
+        if (inject_say(cmd)) s_reviewDay = tv.tm_yday;   // 经云出声才算触发成功
       }
     }
     mind.saveEvolution();

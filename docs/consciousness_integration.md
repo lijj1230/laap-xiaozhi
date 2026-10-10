@@ -120,6 +120,20 @@ main/consciousness/
 > 这两值云端永远看不见）。至此世界模型六维全真：motion/rssi/lastUserMs/
 > temp/strain/lastSeen。
 
+> **2026-10-10 R3 本地武装 + 夜间任务链 MCP 化**：
+> ① R3 预期环复活——不再依赖云 LLM 尾行元数据（MCP-first 后说话即 TTS 正文，
+> 无独立通道）；改为设备侧关键词武装：主人说"等下回来/马上回来…"→
+> `EXP_OWNER_COME`，"我出去了/拜拜/晚安…"→ `EXP_OWNER_AWAY`（drain kind0 处
+> 武装）；结算门改"武装 60s 后的新互动才算回来了"防闪结（武装来自主人自己的
+> 告别语，原 `>=0` 会立刻自结算）。expEma/expN 精度学习恢复运转。
+> ② 夜间任务链 MCP 化——新增 `consciousness.night_review_context`（编号情景
+> 记忆+关系+自我总结，只读，50KB 堆门禁）与 `consciousness.night_review_apply`
+> （情绪精标注/删低质/抽关系/新总结四段 \x1F 分隔入队 kind7，心跳单写者执行
+> moodApply/applyTidyOps/relationsApply/setSemantic——复用原版机械执行层，
+> 云 LLM 出判断）。触发：心跳在 6-8 点（安静窗外）每日一次注入整理指令
+> （"梦醒整理"语义；挪出深夜因注入必有 TTS 回声，避免吵醒主人），门槛
+> memory.count()≥30。MCP 工具 8→10 个。
+
 > **2026-10-10 全量审计（MCP-first 后第二轮）**：逐文件过 consciousness 12 文件 +
 > main 粘合层。修复 5 项：① 注入 JSON 转义缺口 P1——`SendWakeWordDetected` 裸拼接
 > 进 JSON（上游唤醒词路径同缺口，custom_wake_word 的 command.text 可含任意字符），
