@@ -1,6 +1,8 @@
 #include "laap_fs.h"
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
+#include <sys/stat.h>
 #include <esp_log.h>
 #include <esp_littlefs.h>
 
@@ -26,6 +28,12 @@ bool fs_begin() {
   esp_littlefs_info("conscious", &total, &used);
   ESP_LOGI(TAG, "conscious 挂载成功：总 %uKB / 已用 %uKB", (unsigned)(total / 1024), (unsigned)(used / 1024));
   return true;
+}
+
+bool fs_mkdir(const std::string& path) {
+  if (!s_mounted) return false;
+  if (mkdir((MOUNT + path).c_str(), 0755) == 0) return true;
+  return errno == EEXIST;   // 已存在=成功
 }
 
 bool fs_read(const std::string& path, std::string& out) {

@@ -52,14 +52,24 @@ extern "C" void app_main(void)
     });
 
     // 注入"经云说话"通道：意识想说话 → listen-detect 文本 → xiaozhi 云 LLM+TTS 出声。
-    // 协议对象由 Application 持有，在宿主主循环首拍前 protocol_ 可能为空——
-    // 适配器运行时取（心跳 10s 拍节下连接建立的几秒空窗自然被 host_busy 拦住）
+    // 待机时音频通道是关闭的（省电），裸发 detect 会被服务端 goodbye 拒收（M6 实测）——
+    // 须先 OpenAudioChannel 重新握手拿 session_id；建链阻塞 ~1s，Schedule 到主循环执行
     laap::life_set_host_say([](const std::string& text) {
         auto& app = Application::GetInstance();
         auto* protocol = app.protocol();
         if (protocol == nullptr) return false;
-        protocol->SendWakeWordDetected(text);
-        return true;
+        if (protocol->IsAudioChannelOpened()) {
+            protocol->SendWakeWordDetected(text);
+            return true;
+        }
+        app.Schedule([text]() {
+            auto& a = Application::GetInstance();
+            auto* p = a.protocol();
+            if (p == nullptr) return;
+            if (!p->IsAudioChannelOpened() && !p->OpenAudioChannel()) return;
+            p->SendWakeWordDetected(text);
+        });
+        return true;   // 已受理（异步成败心跳不可见，冷却照常计）
     });
 
     // 意识能力注册为 MCP 工具（xiaozhi.me 云端 LLM 经协议通道调用）

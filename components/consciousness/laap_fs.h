@@ -11,6 +11,7 @@ namespace laap {
 
 // 挂载 conscious 分区（幂等；挂载失败返回 false，上层打 ERROR 并禁用持久功能）
 bool fs_begin();
+bool fs_mkdir(const std::string& path);   // 建目录（fopen 不建目录——/mem 须先建）
 
 bool fs_read(const std::string& path, std::string& out);   // 不存在=false
 bool fs_write(const std::string& path, const std::string& content);          // 原子：tmp+rename

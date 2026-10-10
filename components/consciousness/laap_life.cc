@@ -58,6 +58,14 @@ static bool (*s_hostSay)(const std::string&) = nullptr;
 // 主控内置 die 温传感器（启动时装好；nullptr=不可用，此时 bodyTempC=0 即未知）
 static temperature_sensor_handle_t s_tsens = nullptr;
 
+// ---- 心声门铃（M6 实测定稿的注入架构）----
+// 服务端拒收长文本 detect（"Detect is only for wake words"），注入只发固定短敲门
+// 文本 KNOCK；真正的心声内容挂 s_pendingSay，由云端调 get_status 时拉取。
+// 生命周期：敲门成功挂起 → 云端回复落账（drain kind0/kind1）即清 → 15 分钟 TTL 兜底
+static const char* KNOCK = "（心声）";
+static std::string s_pendingSay;
+static uint32_t s_pendingSayMs = 0;
+
 void life_set_host_busy(HostBusyFn fn) { s_hostBusy = fn; }
 void life_set_host_say(bool (*fn)(const std::string&)) { s_hostSay = fn; }
 
@@ -74,8 +82,9 @@ static void enqueue_note(uint8_t kind, const std::string& text) {
 // A 通道①：stt（主人说的话）。同文 180s 去重——MCP log_turn 送来的 user_text 是同一句
 void life_note_user(const std::string& text) {
   if (text.empty()) return;
-  // 自家注入回声防御：云端可能把 detect 文本回显成 stt——那不是主人说话，不记账
+  // 自家注入回声防御：服务端会把 detect 文本回显成 stt——那不是主人说话，不记账
   if (text.rfind("（设备固件自动注入", 0) == 0) return;
+  if (text.rfind(KNOCK, 0) == 0) return;   // 心声门铃的回声
   uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000LL);
   std::lock_guard<std::mutex> g(s_noteMux);
   if (text == s_lastUserText && nowMs - s_lastUserTs < 180000UL) return;   // B 通道的重复
@@ -229,6 +238,15 @@ static bool inject_say(const std::string& deviceSay) {
   return true;
 }
 
+// 敲门+挂心声：短 detect 只当门铃（服务端拒长文本），内容挂 pending_say 等
+// 云端 get_status 来拉。敲门成功才挂（防悬空 pending）
+static bool knock_and_pend(const std::string& pending) {
+  if (!inject_say(KNOCK)) return false;
+  s_pendingSay = pending;
+  s_pendingSayMs = (uint32_t)(esp_timer_get_time() / 1000LL);
+  return true;
+}
+
 // F2 时间感（提示注入用；云 persona 也能自己看钟，这只是让指令更具体）
 static std::string time_slot_cn() {
   if (!time_ok()) return "";
@@ -257,17 +275,17 @@ static void try_express(bool forced, const char* trigger) {
   if (!forced && s_lastTryMs != 0 && nowMs - s_lastTryMs < cd) return;
   s_lastTryMs = nowMs;
 
-  char cmd[384];   // 中文模板 ~230B + 五个 3 位数 + moodCn/goalCN/时段：224 会截断
+  char pend[448];   // 心声文本走 pending_say（std::string 承载），此处仅为格式化暂存
   std::string goal = mind.goalCn();
-  snprintf(cmd, sizeof(cmd),
-           "（设备固件自动注入：这不是主人说话。请以你自己的第一人称说一句不超过 40 字的"
-           "自言自语：此刻内在状态——能量%.0f%% 好奇%.0f%% 社交%.0f%% 安全%.0f%% 表达%.0f%%，"
-           "情绪「%s」，心里最想%s。现在是%s。语气自然，不要汇报数据。）",
+  snprintf(pend, sizeof(pend),
+           "【心声】这不是主人说话，是你的内在状态自己想开口。请以你自己的第一人称说一句"
+           "不超过 40 字的自言自语：此刻能量%.0f%% 好奇%.0f%% 社交%.0f%% 安全%.0f%% 表达%.0f%%，"
+           "情绪「%s」，心里最想%s。现在是%s。语气自然，不要报数据。",
            mind.needs().energy * 100, mind.needs().curiosity * 100, mind.needs().social * 100,
            mind.needs().security * 100, mind.needs().expression * 100,
            mind.moodCn(), goal.c_str(), time_slot_cn().c_str());
-  ESP_LOGI(TAG, "表达注入（%s）", trigger);
-  inject_say(cmd);
+  ESP_LOGI(TAG, "表达心声挂起（%s）", trigger);
+  knock_and_pend(pend);
 }
 
 // ============================================================
@@ -281,25 +299,24 @@ static bool try_monologue(bool force) {
   bool wantIntent = mind.intentCount() > 0 && (s_monoSeq & 1);
   std::string goal = wantIntent && mind.intentCount() > 0 ? mind.intent(0) : "";
 
-  // 容量：独白模板峰值 ~244B（意图 60B + 时段 12B + 中文模板 ~170B），288 够；
-  // 表达链含五个百分数与四个词槽，384 兜底。引号转义膨胀在 inject_say 内做。
-  char cmd[288];
+  // 容量：意图模板峰值 ~280B（意图 60B + 时段 12B + 中文模板 ~170B + 心声前缀）
+  char pend[448];
   std::string slot = time_slot_cn();
   if (wantIntent) {
-    snprintf(cmd, sizeof(cmd),
-             "（设备固件自动注入：这不是主人说话。你心里一直惦记着一个目标：「%s」。"
+    snprintf(pend, sizeof(pend),
+             "【心声】这不是主人说话。你心里一直惦记着一个目标：「%s」。"
              "请以你自己的第一人称念叨 1~3 句：围绕这个目标想想想到了什么、还想知道什么。"
-             "需要资料可以联网查。现在是%s。）",
+             "需要资料可以联网查。现在是%s。",
              goal.c_str(), slot.c_str());
   } else {
-    snprintf(cmd, sizeof(cmd),
-             "（设备固件自动注入：这不是主人说话。你独处了一阵，好奇心和表达欲上来了。"
+    snprintf(pend, sizeof(pend),
+             "【心声】这不是主人说话。你独处了一阵，好奇心和表达欲上来了。"
              "请以你自己的第一人称自言自语 1~3 句：想到什么说什么，可以联网查点新东西再念叨。"
-             "现在是%s，主人不在身边。）",
+             "现在是%s，主人不在身边。",
              slot.c_str());
   }
-  ESP_LOGI(TAG, "独白注入%s", wantIntent ? "（意图驱动）" : "");
-  if (!inject_say(cmd)) return false;
+  ESP_LOGI(TAG, "独白心声挂起%s", wantIntent ? "（意图驱动）" : "");
+  if (!knock_and_pend(pend)) return false;
   s_monoSeq++;   // 经云出声才算推进节拍（目标结算由云/主人后续完成）
   return true;
 }
@@ -342,6 +359,7 @@ static void drain_notes() {
       memory.logEvent("user", text);
       s_sawUserSinceExp = true;
       s_lastUserLen = text.size();
+      s_pendingSay.clear();   // 主人抢了话头：心声不必再送
       if (uint8_t ec2 = expect_from_user_text(text)) {
         mind.setExpectation(ec2);   // R3：告别/归来承诺 → 立预期
         ESP_LOGI(TAG, "R3 预期武装：%s", ec2 == Cognition::EXP_OWNER_COME ? "主人会来" : "主人不会来");
@@ -349,6 +367,7 @@ static void drain_notes() {
       break;
     case 1:   // 云端回复
       memory.logEvent("aris", text);
+      s_pendingSay.clear();   // 心声已送达（本轮回复就是它说的）
       if (s_lastUserLen) {
         mind.evolveAfterChat((int)s_lastUserLen);
         mind.trustUpdate(1, 0);
@@ -443,6 +462,20 @@ static void life_task(void*) {
       esp_sntp_init();
       sntpStarted = true;
     }
+    // E2E 诊断（测试构建，开机一次性）：敲门 + 挂诊断心声（验证短 detect 接受度
+    // 与 pending_say 拉取链路——云端需配合角色介绍才会调 get_status）。M6 后移除
+    static uint8_t s_diagBeat = 0;
+    if (++s_diagBeat == 3) {
+      ESP_LOGI(TAG, "E2E 诊断：敲门+挂诊断心声");
+      knock_and_pend(
+          "【心声】这不是主人说话，是一次自我体检。请依次调这些工具："
+          "① consciousness.get_status；② consciousness.recall（query 填「时间」）；"
+          "③ self.web_search（query 填「今日新闻」）；"
+          "④ consciousness.teach_skill（trigger「报时」instruction「说出现在时间」）；"
+          "⑤ consciousness.add_intent（goal「了解主人的作息」）；"
+          "⑥ self.camera.take_photo（question「眼前有什么」）。"
+          "最后用不超过 30 字总结这次体检，工具结果不用逐条念。");
+    }
     uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000LL);
     float dtMin = (nowMs - lastTickMs) / 60000.0f;
     lastTickMs = nowMs;
@@ -499,16 +532,18 @@ static void life_task(void*) {
       struct tm tv;
       localtime_r(&nowT, &tv);
       if (tv.tm_hour >= 6 && tv.tm_hour < 8 && s_reviewDay != tv.tm_yday) {
-        char cmd[512];
-        snprintf(cmd, sizeof(cmd),
-                 "（设备固件自动注入：这不是主人说话。天刚亮，你刚从梦里醒来。"
-                 "请整理自己的记忆：先调 consciousness.night_review_context 看最近的记忆，"
-                 "再用 consciousness.night_review_apply 提交——删掉重复无价值的、"
-                 "把情绪标签改准、抽出关于主人的偏好承诺边界、写不超过 60 字的自我总结。"
-                 "整理完像刚睡醒一样小声说一句感想，不超过 20 字。）");
-        if (inject_say(cmd)) s_reviewDay = tv.tm_yday;   // 经云出声才算触发成功
+        if (knock_and_pend(
+                "【心声】这不是主人说话。天刚亮，你刚从梦里醒来。请整理自己的记忆："
+                "先调 consciousness.night_review_context 看最近的记忆，再用 "
+                "consciousness.night_review_apply 提交——删掉重复无价值的、把情绪标签改准、"
+                "抽出关于主人的偏好承诺边界、写不超过 60 字的自我总结。整理完像刚睡醒一样"
+                "小声说一句感想，不超过 20 字。"))
+          s_reviewDay = tv.tm_yday;   // 敲门成功才算触发
       }
     }
+    // 心声 TTL：15 分钟没人理=过期清空（防陈旧指令被后来的 get_status 误读）
+    if (!s_pendingSay.empty() && nowMs - s_pendingSayMs > 900000UL)
+      s_pendingSay.clear();
     mind.saveEvolution();
     // ---- MCP 状态快照刷新（含主人教的技能/须遵守的规则/惦记的目标——
     //      "声音"人设由 xiaozhi.me 角色介绍定义；这里供"该遵守什么"）----
@@ -529,6 +564,9 @@ static void life_task(void*) {
         // 原版经系统提示词注入；MCP-first 后并入快照（否则写了没人读，断供）
         std::string bc = mind.broadcastLine();
         if (!bc.empty()) snap += ",\"broadcast\":\"" + json_escape(bc) + "\"";
+        // 心声门铃的内容：敲门已发出（短 detect），云端 get_status 到这里取话
+        if (!s_pendingSay.empty())
+          snap += ",\"pending_say\":\"" + json_escape(s_pendingSay) + "\"";
         snap += "}";
       }
       std::lock_guard<std::mutex> g(s_snapMux);

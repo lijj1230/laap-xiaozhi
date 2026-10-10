@@ -75,7 +75,10 @@ static std::string extract_x(const std::string& line) {
 // ================= begin：残尾修复/计数/净化/对齐/重建工作环 =================
 bool MemorySystem::begin() {
   if (!fs_begin()) return false;
-  fs_append("/mem/.keep", "");   // 确保 /mem 目录存在（追加会创建路径）
+  // fopen 不建目录：/mem 必须显式建（真机 M6 实测：缺目录时 episodes/skills/
+  // rules/relations/intents 全部静默写失败，只报"盘满？"误导）
+  if (!fs_mkdir("/mem")) ESP_LOGW(TAG, "/mem 目录创建失败");
+  fs_append("/mem/.keep", "");   // 目录探针（失败在下述各写入处自然暴露）
   // 掉电残尾修复：无换行尾行截断（防与新记录拼成损坏行）
   {
     size_t sz = fs_size(EP_PATH);

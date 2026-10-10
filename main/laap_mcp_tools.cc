@@ -35,13 +35,16 @@ void laap_register_consciousness_tools() {
                 "count, last_seen (what it last saw through its camera, minutes ago), physical "
                 "state (body_temp/body_strain/motion — temperature 0 means unavailable) — plus "
                 "the command skills you were taught, the behavior rules you must follow, and "
-                "the goals you keep in mind, and broadcast (what currently dominates its "
-                "attention, e.g. a failed expectation — let it color your tone naturally). "
-                "Call it before replying when the user's message "
-                "might trigger a taught skill or stored rule, when the user asks what you "
-                "have seen, or when you need to match your tone to the life's inner state.",
+                "the goals you keep in mind. IMPORTANT: if the field pending_say is present, "
+                "the device's own inner voice just woke you with the wake word and nobody is "
+                "speaking — follow pending_say and reply accordingly (first person, as the "
+                "life itself), then it will be cleared. Call this tool before replying when "
+                "the user's message might trigger a taught skill or stored rule, when the user "
+                "asks what you have seen, or when you need to match your tone to the life's "
+                "inner state.",
                 PropertyList(),
                 [](const PropertyList&) -> ReturnValue {
+                    ESP_LOGI(TAG, "MCP get_status ← 云端");
                     return laap::life_status_snapshot();
                 });
 
@@ -52,7 +55,9 @@ void laap_register_consciousness_tools() {
                 PropertyList({Property("query", kPropertyTypeString).SetMaxLength(72),
                               Property("max_chars", kPropertyTypeInteger, 200, 50, 500)}),
                 [](const PropertyList& properties) -> ReturnValue {
-                    std::string hit = laap::life_recall(properties["query"].value<std::string>(),
+                    std::string q = properties["query"].value<std::string>();
+                    ESP_LOGI(TAG, "MCP recall「%s」← 云端", q.c_str());
+                    std::string hit = laap::life_recall(q,
                                                         properties["max_chars"].value<int>());
                     if (hit.empty()) return std::string("（记忆里没有找到相关内容）");
                     return hit;
@@ -106,6 +111,8 @@ void laap_register_consciousness_tools() {
                               Property("assistant_text", kPropertyTypeString, std::string(""))
                                   .SetMaxLength(200)}),
                 [](const PropertyList& properties) -> ReturnValue {
+                    ESP_LOGI(TAG, "MCP log_turn（user %uB）← 云端",
+                             (unsigned)properties["user_text"].value<std::string>().size());
                     laap::life_note_conversation(
                         properties["user_text"].value<std::string>(),
                         properties["assistant_text"].value<std::string>());
@@ -121,6 +128,8 @@ void laap_register_consciousness_tools() {
                 "your memories.",
                 PropertyList({Property("last_n", kPropertyTypeInteger, 30, 10, 60)}),
                 [](const PropertyList& properties) -> ReturnValue {
+                    ESP_LOGI(TAG, "MCP night_review_context(last_n=%d) ← 云端",
+                             properties["last_n"].value<int>());
                     return laap::life_review_context(properties["last_n"].value<int>());
                 });
 
@@ -142,6 +151,7 @@ void laap_register_consciousness_tools() {
                               Property("summary", kPropertyTypeString, std::string(""))
                                   .SetMaxLength(200)}),
                 [](const PropertyList& properties) -> ReturnValue {
+                    ESP_LOGI(TAG, "MCP night_review_apply ← 云端");
                     return laap::life_review_apply(
                         properties["mood_lines"].value<std::string>(),
                         properties["tidy_ops"].value<std::string>(),
@@ -151,7 +161,7 @@ void laap_register_consciousness_tools() {
 
     mcp.AddTool("self.web_search",
                 "Search the web FROM THE DEVICE itself (free, unlimited, no quota, no key) "
-                "using Bing news RSS. Use this tool whenever the reply needs fresh "
+                "using Bing web search. Use this tool whenever the reply needs fresh "
                 "information: news, facts, weather, recent events, or anything you are unsure "
                 "about — it replaces any cloud search plugin (cloud search is quota-limited). "
                 "Do not use it for casual chat. Returns up to ~500 bytes of titles+snippets.",
