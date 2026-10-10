@@ -27,8 +27,10 @@ void laap_register_consciousness_tools() {
     mcp.AddTool("consciousness.get_status",
                 "Read the digital life's inner state: needs (energy/curiosity/social/security/"
                 "expression), mood, current goal, trust toward the owner, generation, memory "
-                "count. Use it to match your tone to the life's current inner state, or when "
-                "the user asks about its feelings/state.",
+                "count — plus the command skills you were taught, the behavior rules you must "
+                "follow, and the goals you keep in mind. Call it before replying when the "
+                "user's message might trigger a taught skill or stored rule, or when you need "
+                "to match your tone to the life's current inner state.",
                 PropertyList(),
                 [](const PropertyList&) -> ReturnValue {
                     return laap::life_status_snapshot();

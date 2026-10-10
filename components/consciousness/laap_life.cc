@@ -3,6 +3,7 @@
 #include "laap_cognition.h"
 #include "laap_skills.h"
 #include "laap_rules.h"
+#include "laap_util.h"   // json_escape（快照内嵌技能/规则/目标文本）
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -68,6 +69,8 @@ static void enqueue_note(uint8_t kind, const std::string& text) {
 // A 通道①：stt（主人说的话）。同文 180s 去重——MCP log_turn 送来的 user_text 是同一句
 void life_note_user(const std::string& text) {
   if (text.empty()) return;
+  // 自家注入回声防御：云端可能把 detect 文本回显成 stt——那不是主人说话，不记账
+  if (text.rfind("（设备固件自动注入", 0) == 0) return;
   uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000LL);
   std::lock_guard<std::mutex> g(s_noteMux);
   if (text == s_lastUserText && nowMs - s_lastUserTs < 180000UL) return;   // B 通道的重复
@@ -159,14 +162,6 @@ static int wifi_rssi() {
   if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK && ap.rssi < 0) return ap.rssi;
   return -100;
 }
-static void str_trim(std::string& s) {
-  while (!s.empty() &&
-         (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n'))
-    s.erase(s.begin());
-  while (!s.empty() &&
-         (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n'))
-    s.pop_back();
-}
 
 // 把"想说什么"经宿主 listen-detect 注入给云端（云 LLM 生成+云 TTS 出声）。
 // say 为空=只注入内在状态；deviceSay 给云 persona 的直接指令。
@@ -178,8 +173,13 @@ static bool inject_say(const std::string& deviceSay) {
   if (s_lastInjectMs != 0 && nowMs - s_lastInjectMs < EXPRESS_CD_MIN * 60000UL) return false;
   if (!s_hostSay(deviceSay)) return false;
   s_lastInjectMs = nowMs;
-  mind.onExpressed(true);                    // 表达完成（成败都算表达了——云侧成败设备不可见）
-  memory.logEvent("aris", "【自发·经云】" + utf8_cut(deviceSay, 100));
+  mind.onExpressed(true);                    // 表达完成（云侧成败设备不可见）
+  // 云回复稍后经 A 通道（sentence_start/stop）落账——这里清"本轮已记账"名额，
+  // 否则上一轮对话留下的 flag 会把自发说话的回复挡掉。命令文本本身不记（正文才是它说的话）
+  {
+    std::lock_guard<std::mutex> g(s_noteMux);
+    s_asstLoggedThisTurn = false;
+  }
   return true;
 }
 
@@ -214,7 +214,7 @@ static void try_express(bool forced, const char* trigger) {
   char cmd[384];   // 中文模板 ~230B + 五个 3 位数 + moodCn/goalCN/时段：224 会截断
   std::string goal = mind.goalCn();
   snprintf(cmd, sizeof(cmd),
-           "（这是设备固件的自动注入，不是主人说话。请以 Aris 的第一人称说一句不超过 40 字的"
+           "（设备固件自动注入：这不是主人说话。请以你自己的第一人称说一句不超过 40 字的"
            "自言自语：此刻内在状态——能量%.0f%% 好奇%.0f%% 社交%.0f%% 安全%.0f%% 表达%.0f%%，"
            "情绪「%s」，心里最想%s。现在是%s。语气自然，不要汇报数据。）",
            mind.needs().energy * 100, mind.needs().curiosity * 100, mind.needs().social * 100,
@@ -239,14 +239,14 @@ static bool try_monologue(bool force) {
   std::string slot = time_slot_cn();
   if (wantIntent) {
     snprintf(cmd, sizeof(cmd),
-             "（设备固件自动注入。Aris 心里一直惦记着一个目标：「%s」。"
-             "请以第一人称念叨 1~3 句：围绕这个目标想想想到了什么、还想知道什么。"
+             "（设备固件自动注入：这不是主人说话。你心里一直惦记着一个目标：「%s」。"
+             "请以你自己的第一人称念叨 1~3 句：围绕这个目标想想想到了什么、还想知道什么。"
              "需要资料可以联网查。现在是%s。）",
              goal.c_str(), slot.c_str());
   } else {
     snprintf(cmd, sizeof(cmd),
-             "（设备固件自动注入。Aris 独处了一阵，好奇心和表达欲上来了。"
-             "请以第一人称自言自语 1~3 句：想到什么说什么，可以联网查点新东西再念叨。"
+             "（设备固件自动注入：这不是主人说话。你独处了一阵，好奇心和表达欲上来了。"
+             "请以你自己的第一人称自言自语 1~3 句：想到什么说什么，可以联网查点新东西再念叨。"
              "现在是%s，主人不在身边。）",
              slot.c_str());
   }
@@ -383,15 +383,22 @@ static void life_task(void*) {
       }
     }
     mind.saveEvolution();
-    // ---- MCP 状态快照刷新 ----
+    // ---- MCP 状态快照刷新（含主人教的技能/须遵守的规则/惦记的目标——
+    //      "声音"人设由 xiaozhi.me 角色介绍定义；这里供"该遵守什么"）----
     {
       std::string snap = mind.worldJson();
       if (!snap.empty() && snap.back() == '}') {
         snap.pop_back();
         char extra[64];
-        snprintf(extra, sizeof(extra), ",\"memory_count\":%u}",
-                 (unsigned)memory.count());
+        snprintf(extra, sizeof(extra), ",\"memory_count\":%u", (unsigned)memory.count());
         snap += extra;
+        std::string sk = skills.promptLine();
+        if (!sk.empty()) snap += ",\"skills\":\"" + json_escape(sk) + "\"";
+        std::string rl = rules.promptLine();
+        if (!rl.empty()) snap += ",\"rules\":\"" + json_escape(rl) + "\"";
+        std::string it = mind.intentsLine();
+        if (!it.empty()) snap += ",\"intents\":\"" + json_escape(it) + "\"";
+        snap += "}";
       }
       std::lock_guard<std::mutex> g(s_snapMux);
       s_statusSnap = snap;
