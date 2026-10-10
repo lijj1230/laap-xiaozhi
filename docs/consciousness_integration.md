@@ -68,7 +68,7 @@ main/consciousness/
 
 ### 与小智宿主的挂钩点（唯一侵入面，全部通过 Schedule() 回主任务）
 
-1. **对话记忆沉淀**：`Application::OnIncomingJson` 收到云端识别文本（`{"type":"tts","text":...}` 与 listen detect text）→ `Schedule` 投给 `laap_memory.logEvent` + `skills.hit`。主对话提示词在云端，设备侧只"旁听记账"（一期边界，二期解除）。
+1. **对话记忆沉淀（MCP-first，2026-10-10 修订）**：撤协议旁听挂点。xiaozhi.me 云端 LLM 经 MCP 协议调用设备侧意识工具（main/laap_mcp_tools.cc 注册 6 个：get_status/recall/remember/teach_skill/add_intent/apply_rules）；宿主把每轮对话经 `laap::life_note_conversation(user, assistant)` 成对转发给心跳任务落账。所有回调只入队/读快照，单一写者=心跳任务不变。
 2. **按钮/触摸→表达**：现有 Board 按钮事件 → `laap_life.Express(forced)`.
 3. **静默独白**：`laap_life` 任务自有节奏（idleSilence/idleEvery 配置），不依赖宿主。
 4. **堆门禁**：所有意识链入口（life/expression/monologue/ttspre 等价物）+ 宿主状态感知（`Application::GetDeviceState()`——小智正在语音对话时意识链全部让路，独占期=对话期+10s）。
