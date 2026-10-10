@@ -9,10 +9,13 @@
 //   consciousness.add_intent   对话中提炼的目标存进意识（独白会去推进）
 //   consciousness.apply_rules  主人反馈沉淀为行为规则（自进化数据层）
 //   consciousness.log_turn     每轮对话转发进设备侧记忆（B 通道；与宿主旁听 A 通道去重并存）
-// 线程契约：所有回调只走 laap_life 的队列/快照接口（单一写者=心跳任务）
+//   self.web_search            设备侧联网搜索（必应 RSS；零云配额零 Key）
+// 线程契约：所有回调只走 laap_life 的队列/快照接口（单一写者=心跳任务）；
+// web_search 例外：就地同步 HTTP（协议任务本来就同步等工具结果，相机工具同模式）
 // ============================================================
 #include "mcp_server.h"
 #include "laap_life.h"
+#include "laap_search.h"
 
 #include <esp_log.h>
 
@@ -101,5 +104,20 @@ void laap_register_consciousness_tools() {
                     return true;
                 });
 
-    ESP_LOGI(TAG, "意识 MCP 工具已注册（7 个）");
+    mcp.AddTool("self.web_search",
+                "Search the web FROM THE DEVICE itself (free, unlimited, no quota, no key) "
+                "using Bing news RSS. Use this tool whenever the reply needs fresh "
+                "information: news, facts, weather, recent events, or anything you are unsure "
+                "about — it replaces any cloud search plugin (cloud search is quota-limited). "
+                "Do not use it for casual chat. Returns up to ~500 bytes of titles+snippets.",
+                PropertyList({Property("query", kPropertyTypeString).SetMaxLength(100)}),
+                [](const PropertyList& properties) -> ReturnValue {
+                    std::string hit = laap::laapSearch.search(
+                        properties["query"].value<std::string>());
+                    if (hit.empty())
+                        return std::string("（搜索无结果或网络暂不可用，请凭已有知识回答）");
+                    return hit;
+                });
+
+    ESP_LOGI(TAG, "意识 MCP 工具已注册（8 个）");
 }
