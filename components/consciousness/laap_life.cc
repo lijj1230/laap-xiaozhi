@@ -177,12 +177,15 @@ static int wifi_rssi() {
 // 把"想说什么"经宿主 listen-detect 注入给云端（云 LLM 生成+云 TTS 出声）。
 // say 为空=只注入内在状态；deviceSay 给云 persona 的直接指令。
 // 防连发：注入后至少冷却 EXPRESS_CD_MIN 分钟（表达链自身冷却的另一道兜底）。
+// 文本须过 json_escape：宿主 SendWakeWordDetected 是裸拼接进 JSON 的（上游
+// 唤醒词路径同缺口），任何引号/反斜杠/控制字节都会打爆整帧协议消息
 static bool inject_say(const std::string& deviceSay) {
+  if (deviceSay.empty()) return false;
   if (!s_hostSay) return false;
   if (host_busy()) return false;             // 云对话进行中：让路
   uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000LL);
   if (s_lastInjectMs != 0 && nowMs - s_lastInjectMs < EXPRESS_CD_MIN * 60000UL) return false;
-  if (!s_hostSay(deviceSay)) return false;
+  if (!s_hostSay(json_escape(deviceSay))) return false;
   s_lastInjectMs = nowMs;
   mind.onExpressed(true);                    // 表达完成（云侧成败设备不可见）
   // 云回复稍后经 A 通道（sentence_start/stop）落账——这里清"本轮已记账"名额，
@@ -246,6 +249,8 @@ static bool try_monologue(bool force) {
   bool wantIntent = mind.intentCount() > 0 && (s_monoSeq & 1);
   std::string goal = wantIntent && mind.intentCount() > 0 ? mind.intent(0) : "";
 
+  // 容量：独白模板峰值 ~244B（意图 60B + 时段 12B + 中文模板 ~170B），288 够；
+  // 表达链含五个百分数与四个词槽，384 兜底。引号转义膨胀在 inject_say 内做。
   char cmd[288];
   std::string slot = time_slot_cn();
   if (wantIntent) {
@@ -423,6 +428,10 @@ static void life_task(void*) {
         if (!rl.empty()) snap += ",\"rules\":\"" + json_escape(rl) + "\"";
         std::string it = mind.intentsLine();
         if (!it.empty()) snap += ",\"intents\":\"" + json_escape(it) + "\"";
+        // C1 全局广播：预期落空等显著事件 30 分钟内的"此刻占据注意"——
+        // 原版经系统提示词注入；MCP-first 后并入快照（否则写了没人读，断供）
+        std::string bc = mind.broadcastLine();
+        if (!bc.empty()) snap += ",\"broadcast\":\"" + json_escape(bc) + "\"";
         snap += "}";
       }
       std::lock_guard<std::mutex> g(s_snapMux);

@@ -119,6 +119,20 @@ main/consciousness/
 > strain 分支恢复真实触发。worldJson 补 `body_temp`/`body_strain` 上行（原先
 > 这两值云端永远看不见）。至此世界模型六维全真：motion/rssi/lastUserMs/
 > temp/strain/lastSeen。
+
+> **2026-10-10 全量审计（MCP-first 后第二轮）**：逐文件过 consciousness 12 文件 +
+> main 粘合层。修复 5 项：① 注入 JSON 转义缺口 P1——`SendWakeWordDetected` 裸拼接
+> 进 JSON（上游唤醒词路径同缺口，custom_wake_word 的 command.text 可含任意字符），
+> `inject_say` 入口统一 `json_escape`；② `log_turn` 的 assistant_text 无
+> SetMaxLength——云端可推任意大文本进 s_asstBuf，限 200B；③ `addIntent` 竖线/换行
+> 消毒——intents.txt 是 "ts|text" 行式落盘，污染文本破坏行结构与独白模板引用；
+> ④ C1 广播断供 P1——`broadcastSalience` 写的"此刻占据注意"（预期落空等）经
+> `broadcastLine()` 零消费（原版走系统提示词），现并入 get_status 快照 `broadcast`
+> 字段；⑤ get_status 描述同步更新。
+> **登记不修**：R3 预期环空转（`setExpectation` 零调用方——原版由云 LLM 在独白/
+> 表达尾行输出「预期：…」固件解析武装；注入契约变更属行为面重设计，M6 后议）；
+> 16 个零调用符号（moodApply/applyTidyOps/episodicTail/recentTurns 等）是原版
+> 夜间任务链接口，二期接回，保留。
 > 同轮世界模型审计（死字段已由本条全部复活）：除相机外无任何数据真正往返
 > 云端——lastUserMs 触发信号来自云 ASR/log_turn 但值本地算；rssi/time(SNTP)/
 > uptime/heap 纯本地；环境数字只在云调 get_status 时上行（拉模式），从不随

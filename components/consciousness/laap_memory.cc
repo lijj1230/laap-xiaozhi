@@ -21,10 +21,11 @@ static const char* EP_PATH = "/mem/episodes.jsonl";
 static const int  EP_MAX   = 300;
 static const char* REL_PATH = "/mem/relations.jsonl";
 static const int  REL_MAX  = 40;
-static float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
+[[maybe_unused]] static float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 // 流式逐行读工具：File API 无 Arduino readStringUntil，自实现
-static bool read_line(FILE* f, std::string& out) {
+//（向量删除后当前无调用方；二期夜间任务链接回时复用）
+[[maybe_unused]] static bool read_line(FILE* f, std::string& out) {
   out.clear();
   int c;
   while ((c = fgetc(f)) != EOF && c != '\n') out += (char)c;
@@ -652,7 +653,6 @@ void MemorySystem::reloadWork() {
   }
   for (auto& l : tail) {
     size_t rp = l.find("\"r\":\"");
-    size_t xp = l.find("\"x\":\"");
     std::string role = l.substr(rp + 5, l.find('"', rp + 5) - (rp + 5));
     std::string x = extract_x(l);
     std::string entry = role + ":" + x;

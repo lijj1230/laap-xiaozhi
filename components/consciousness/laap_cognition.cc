@@ -202,6 +202,10 @@ void Cognition::clearAllIntents() {
 
 bool Cognition::addIntent(const std::string& text, uint32_t ts) {
   std::string t = utf8_cut(text, 60);
+  // intents.txt 是 "ts|text" 行式落盘：竖线/换行会破坏行结构与独白模板引用
+  for (size_t p; (p = t.find('|')) != std::string::npos; ) t[p] = ' ';
+  for (size_t p; (p = t.find('\n')) != std::string::npos; ) t[p] = ' ';
+  for (size_t p; (p = t.find('\r')) != std::string::npos; ) t[p] = ' ';
   if (t.length() < 6) return false;
   for (int i = 0; i < intentN_; i++)
     if (intents_[i] == t) return false;

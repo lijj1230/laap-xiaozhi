@@ -33,7 +33,9 @@ void laap_register_consciousness_tools() {
                 "count, last_seen (what it last saw through its camera, minutes ago), physical "
                 "state (body_temp/body_strain/motion — temperature 0 means unavailable) — plus "
                 "the command skills you were taught, the behavior rules you must follow, and "
-                "the goals you keep in mind. Call it before replying when the user's message "
+                "the goals you keep in mind, and broadcast (what currently dominates its "
+                "attention, e.g. a failed expectation — let it color your tone naturally). "
+                "Call it before replying when the user's message "
                 "might trigger a taught skill or stored rule, when the user asks what you "
                 "have seen, or when you need to match your tone to the life's inner state.",
                 PropertyList(),
@@ -96,9 +98,11 @@ void laap_register_consciousness_tools() {
                 "Log the current conversation turn into the life's own long-term memory "
                 "(device-side episodes + personality evolution + trust). Call this after each "
                 "completed turn with what the user said and what you replied. Duplicate logging "
-                "is automatically de-duplicated (a host-side auto channel also forwards turns).",
+                "is automatically de-duplicated (a host-side auto channel also forwards turns). "
+                "Keep assistant_text under 200 chars (longer is trimmed).",
                 PropertyList({Property("user_text", kPropertyTypeString).SetMaxLength(300),
-                              Property("assistant_text", kPropertyTypeString, std::string(""))}),
+                              Property("assistant_text", kPropertyTypeString, std::string(""))
+                                  .SetMaxLength(200)}),
                 [](const PropertyList& properties) -> ReturnValue {
                     laap::life_note_conversation(
                         properties["user_text"].value<std::string>(),
