@@ -34,12 +34,18 @@ static const TickType_t BEAT = pdMS_TO_TICKS(10000);  // 10s 心跳拍
 static std::mutex s_noteMux;
 // 队列元素：0=主人话 1=云端回复；2=记忆强化 3=教技能 5=新意图
 static std::deque<std::pair<uint8_t, std::string>> s_notes;
-// 成对转发缓冲（user 先到 assistant 后到；凑成一对由心跳落账）
-static std::string s_pairUser, s_pairAssistant;
 static HostBusyFn s_hostBusy = nullptr;
 static bool s_sawUserSinceExp = false;       // 预期武装后有无对话动静
 static size_t s_lastUserLen = 0;             // 最近的用户话语长度（回复到达时进化用）
 static uint32_t s_lastInjectMs = 0;          // 上次 detect 注入时刻（防连发）
+
+// ---- A+B 双通道记账去重（A=宿主旁听挂点自动 / B=MCP log_turn 云端主动）----
+static std::string s_pairUser;               // 悬挂等待配对的 user 话
+static std::string s_lastUserText;           // 用户内容去重（双通道同一条话只记一次）
+static uint32_t s_lastUserTs = 0;
+static bool s_asstLoggedThisTurn = false;    // 每轮回复只记一条（首达优先，另一通道丢弃）
+static std::string s_asstBuf;                // A 通道句片累积（tts stop 整轮落账）
+
 // 状态快照互斥：心跳任务更新（写者），MCP 回调读（拷贝）
 static std::mutex s_snapMux;
 static std::string s_statusSnap = "{}";
@@ -49,34 +55,62 @@ static bool (*s_hostSay)(const std::string&) = nullptr;
 void life_set_host_busy(HostBusyFn fn) { s_hostBusy = fn; }
 void life_set_host_say(bool (*fn)(const std::string&)) { s_hostSay = fn; }
 
-static void enqueue_note(uint8_t kind, const std::string& text) {
-  std::lock_guard<std::mutex> g(s_noteMux);
+static void enqueue_note_locked(uint8_t kind, const std::string& text) {
   if (s_notes.size() >= 24) s_notes.pop_front();   // 积压保护：丢最旧
   s_notes.emplace_back(kind, text);
 }
 
-// ============================================================
-// MCP 工具接口（回调在协议任务上下文；只入队/拷贝，绝不写意识态）
-// ============================================================
-void life_note_conversation(const std::string& userText, const std::string& assistantText) {
-  if (!userText.empty()) {
-    std::lock_guard<std::mutex> g(s_noteMux);
-    if (!s_pairUser.empty()) {   // 上一条 user 没等到回复：先落账再覆盖
-      if (s_notes.size() >= 24) s_notes.pop_front();
-      s_notes.emplace_back(0, s_pairUser);
-    }
-    s_pairUser = userText;
-    if (assistantText.empty()) return;
-  }
-  std::string user = userText, assist = assistantText;
-  {
-    std::lock_guard<std::mutex> g(s_noteMux);
-    if (user.empty() && !s_pairAssistant.empty()) return;
-    if (user.empty()) user = s_pairUser;
+static void enqueue_note(uint8_t kind, const std::string& text) {
+  std::lock_guard<std::mutex> g(s_noteMux);
+  enqueue_note_locked(kind, text);
+}
+
+// A 通道①：stt（主人说的话）。同文 180s 去重——MCP log_turn 送来的 user_text 是同一句
+void life_note_user(const std::string& text) {
+  if (text.empty()) return;
+  uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000LL);
+  std::lock_guard<std::mutex> g(s_noteMux);
+  if (text == s_lastUserText && nowMs - s_lastUserTs < 180000UL) return;   // B 通道的重复
+  if (!s_pairUser.empty()) enqueue_note_locked(0, s_pairUser);   // 上条悬挂没等到回复：单独落账
+  s_pairUser = text;
+  s_lastUserText = text;
+  s_lastUserTs = nowMs;
+  s_asstLoggedThisTurn = false;   // 新一轮开始：回复记账名额重置
+}
+
+// A 通道②：tts sentence_start（回复句片累积；600B 上限防异常流灌爆）
+void life_note_assistant_sentence(const std::string& text) {
+  if (text.empty()) return;
+  std::lock_guard<std::mutex> g(s_noteMux);
+  if (s_asstBuf.size() < 600) s_asstBuf += text;
+}
+
+// A 通道③：tts stop（整轮回复落账：与悬挂 user 成对，drain 侧触发进化/信任）
+void life_note_assistant_done() {
+  std::lock_guard<std::mutex> g(s_noteMux);
+  std::string full;
+  full.swap(s_asstBuf);
+  if (full.empty() || s_asstLoggedThisTurn) return;   // 空/B 通道已记过这轮
+  s_asstLoggedThisTurn = true;
+  if (!s_pairUser.empty()) {
+    enqueue_note_locked(0, s_pairUser);
     s_pairUser.clear();
   }
-  enqueue_note(0, user);
-  if (!assist.empty()) enqueue_note(1, assist);
+  enqueue_note_locked(1, full);
+}
+
+// B 通道：MCP log_turn / 宿主显式成对转发（user 与 assistant 可任一为空）
+void life_note_conversation(const std::string& userText, const std::string& assistantText) {
+  if (!userText.empty()) life_note_user(userText);   // 含双通道去重
+  if (assistantText.empty()) return;
+  std::lock_guard<std::mutex> g(s_noteMux);
+  if (s_asstLoggedThisTurn) return;                  // A 通道已记过这轮
+  s_asstLoggedThisTurn = true;
+  if (!s_pairUser.empty()) {
+    enqueue_note_locked(0, s_pairUser);
+    s_pairUser.clear();
+  }
+  enqueue_note_locked(1, assistantText);
 }
 
 std::string life_status_snapshot() {
@@ -237,7 +271,7 @@ static void drain_notes() {
       s_notes.pop_front();
     }
     switch (kind) {
-    case 0:   // 主人说了话（宿主经 MCP/life_note_conversation 转发）
+    case 0:   // 主人说了话（A 通道 stt / B 通道 MCP log_turn 转发）
       mind.onUserInteraction();
       skills.hit(text);
       memory.logEvent("user", text);

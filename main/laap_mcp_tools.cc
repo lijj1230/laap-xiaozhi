@@ -8,6 +8,7 @@
 //   consciousness.teach_skill  主人教口令技能（触发词+指令由云 LLM 解析）
 //   consciousness.add_intent   对话中提炼的目标存进意识（独白会去推进）
 //   consciousness.apply_rules  主人反馈沉淀为行为规则（自进化数据层）
+//   consciousness.log_turn     每轮对话转发进设备侧记忆（B 通道；与宿主旁听 A 通道去重并存）
 // 线程契约：所有回调只走 laap_life 的队列/快照接口（单一写者=心跳任务）
 // ============================================================
 #include "mcp_server.h"
@@ -84,5 +85,19 @@ void laap_register_consciousness_tools() {
                     return laap::life_apply_rules(properties["rules"].value<std::string>()) > 0;
                 });
 
-    ESP_LOGI(TAG, "意识 MCP 工具已注册（6 个）");
+    mcp.AddTool("consciousness.log_turn",
+                "Log the current conversation turn into the life's own long-term memory "
+                "(device-side episodes + personality evolution + trust). Call this after each "
+                "completed turn with what the user said and what you replied. Duplicate logging "
+                "is automatically de-duplicated (a host-side auto channel also forwards turns).",
+                PropertyList({Property("user_text", kPropertyTypeString).SetMaxLength(300),
+                              Property("assistant_text", kPropertyTypeString, std::string(""))}),
+                [](const PropertyList& properties) -> ReturnValue {
+                    laap::life_note_conversation(
+                        properties["user_text"].value<std::string>(),
+                        properties["assistant_text"].value<std::string>());
+                    return true;
+                });
+
+    ESP_LOGI(TAG, "意识 MCP 工具已注册（7 个）");
 }

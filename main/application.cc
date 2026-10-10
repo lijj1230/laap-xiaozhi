@@ -19,6 +19,9 @@
 #include <cstring>
 #include <limits>
 
+// LAAP 意识旁听 A 通道（只读记账：文本入队由心跳任务统一落账；B 通道=MCP log_turn）
+#include "laap_life.h"
+
 #define TAG "Application"
 
 Application::Application() : notify_player_(audio_service_) {
@@ -627,6 +630,8 @@ void Application::InitializeProtocol() {
                     SetDeviceState(kDeviceStateSpeaking);
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
+                // LAAP 意识旁听 A③：整轮回复落账（句片已累积，只入队不碰协议逻辑）
+                laap::life_note_assistant_done();
                 Schedule([this]() {
                     if (GetDeviceState() == kDeviceStateSpeaking) {
                         if (listening_mode_ == kListeningModeManualStop) {
@@ -639,6 +644,8 @@ void Application::InitializeProtocol() {
             } else if (strcmp(state->valuestring, "sentence_start") == 0) {
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
+                    // LAAP 意识旁听 A②：回复句片累积（tts stop 时整轮落账）
+                    laap::life_note_assistant_sentence(text->valuestring);
                     std::vector<TextGlyph> glyphs;
                     uint8_t bpp = 0;
                     if (!TextGlyphPayload::Parse(root, glyphs, bpp)) {
@@ -655,6 +662,8 @@ void Application::InitializeProtocol() {
         } else if (strcmp(type->valuestring, "stt") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
+                    // LAAP 意识旁听 A①：主人说的话入记账队列（只入队不碰协议逻辑）
+                    laap::life_note_user(text->valuestring);
                     std::vector<TextGlyph> glyphs;
                     uint8_t bpp = 0;
                     if (!TextGlyphPayload::Parse(root, glyphs, bpp)) {

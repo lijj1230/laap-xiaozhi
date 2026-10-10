@@ -19,8 +19,14 @@ void life_start();                               // boot 成功路径末调用�
 void life_set_host_busy(HostBusyFn fn);          // main 注入（DeviceState 忙闲探测）
 void life_set_host_say(HostSayFn fn);            // main 注入（SendWakeWordDetected 适配器）
 
-// ---- MCP 工具接口（McpServer 回调在协议任务上下文调用）----
-void life_note_conversation(const std::string& userText, const std::string& assistantText);
+// ---- 对话记账：A 通道（宿主旁听挂点，自动）+ B 通道（MCP log_turn，云端主动）----
+// 双通道并存，内置去重：用户同文 180s 只记一次；每轮回复只记一条（首达优先）
+void life_note_user(const std::string& text);                    // A①：stt 主人说的话
+void life_note_assistant_sentence(const std::string& text);      // A②：tts sentence_start 句片
+void life_note_assistant_done();                                 // A③：tts stop 整轮落账
+void life_note_conversation(const std::string& userText, const std::string& assistantText);  // B
+
+// ---- 其余 MCP 工具接口（McpServer 回调在协议任务上下文调用）----
 std::string life_status_snapshot();              // 意识状态 JSON（mutex 快照，无撕裂）
 std::string life_recall(const std::string& query, int maxChars);  // 关键词召回
 bool life_remember(const std::string& fragment); // 记忆强化（权重 +0.5）
