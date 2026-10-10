@@ -80,6 +80,14 @@ main/consciousness/
 - **M3**：laap_llm + laap_search（设备侧思考能力）。
 - **M4**：laap_tts + libhelix + 喇叭直写（自主发声能力）。
 - **M5**：laap_life 心跳任务 + 全链堆门禁 + 黑匣子（RTC panic 捕获平移）。
+
+> **2026-10-10 修订（网络三件删除，用户拍板）**：设备侧 AI 客户端全部删除——
+> `laap_llm`/`laap_search`/`laap_tts`+libhelix 移除（-100KB），语义向量通道删除
+> （召回=关键词通道）。**自主说话经宿主 listen-detect 注入**：心跳把内在状态编入
+> 合成指令 → `Protocol::SendWakeWordDetected` 发到云端 → xiaozhi 云 LLM（自带联网
+> 搜索）+ 云 TTS 出声（声音与正常对话统一）。API Key 全部移到 xiaozhi.me 云端配置，
+> 设备侧零密钥。M6 需实测：云端对'无唤醒 detect'的接受度。
+
 - **M6**：IDF 6.1 编译通过 → USB 烧录 szpi-esp32s3 → 实机验证（语音对话不干扰 + 自主表达发声 + 重启记忆延续）。
 - **二期**：主对话切设备侧全管线。
 

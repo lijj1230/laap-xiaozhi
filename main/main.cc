@@ -16,12 +16,13 @@
 namespace laap {
 bool consciousness_init();
 const char* consciousness_status_line();
-void laap_tts_set_output(std::function<void(std::vector<int16_t>&)>);
 void life_set_host_busy(bool (*fn)());
+void life_set_host_say(bool (*fn)(const std::string&));
 }
 void laap_register_consciousness_tools();   // main/laap_mcp_tools.cc：意识工具注册进宿主 MCP
 
 #include "application.h"
+#include "protocol.h"
 
 #define TAG "main"
 
@@ -43,19 +44,22 @@ extern "C" void app_main(void)
         ESP_LOGI(TAG, "LAAP consciousness: %s", laap::consciousness_status_line());
     }
 
-    // 注入 TTS 喇叭输出适配器（意识组件不直接依赖宿主对象）
-    {
-        extern void laap_tts_set_output(std::function<void(std::vector<int16_t>&)>);
-        laap::laap_tts_set_output([](std::vector<int16_t>& data) {
-            Board::GetInstance().GetAudioCodec()->OutputData(data);
-        });
-    }
-
-    // 注入宿主忙闲探测：意识心跳在宿主对话/播报时让路（双声道互斥，M5 门禁）
+    // 注入宿主忙闲探测：意识心跳在宿主对话/播报时让路（双声道互斥）
     laap::life_set_host_busy([]() {
         auto s = Application::GetInstance().GetDeviceState();
         return s == kDeviceStateSpeaking || s == kDeviceStateListening ||
                s == kDeviceStateNotifying;
+    });
+
+    // 注入"经云说话"通道：意识想说话 → listen-detect 文本 → xiaozhi 云 LLM+TTS 出声。
+    // 协议对象由 Application 持有，在宿主主循环首拍前 protocol_ 可能为空——
+    // 适配器运行时取（心跳 10s 拍节下连接建立的几秒空窗自然被 host_busy 拦住）
+    laap::life_set_host_say([](const std::string& text) {
+        auto& app = Application::GetInstance();
+        auto* protocol = app.protocol();
+        if (protocol == nullptr) return false;
+        protocol->SendWakeWordDetected(text);
+        return true;
     });
 
     // 意识能力注册为 MCP 工具（xiaozhi.me 云端 LLM 经协议通道调用）

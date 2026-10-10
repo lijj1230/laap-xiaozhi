@@ -21,19 +21,6 @@ static const char* EP_PATH = "/mem/episodes.jsonl";
 static const int  EP_MAX   = 300;
 static const char* REL_PATH = "/mem/relations.jsonl";
 static const int  REL_MAX  = 40;
-static const char* EMB_PATH = "/mem/emb.bin";
-static const int   EMB_DIM  = 1024;
-
-// M3 接 laap_llm 后由其实现（weak 存根：返回 false=走关键词通道）
-__attribute__((weak)) bool laap_embed(const std::string& text, std::string& binOut) { return false; }
-
-static bool call_embedding(const std::string& text, float* out) {
-  std::string bin;
-  if (!laap_embed(text, bin) || bin.size() < (size_t)(EMB_DIM * 4)) return false;
-  memcpy(out, bin.data(), EMB_DIM * 4);
-  return true;
-}
-
 static float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 // 流式逐行读工具：File API 无 Arduino readStringUntil，自实现
@@ -84,13 +71,6 @@ static std::string extract_x(const std::string& line) {
   return sanitize_utf8(x);
 }
 
-static float cosine_of(const float* a, const float* b, int n) {
-  float dot = 0, na = 0, nb = 0;
-  for (int i = 0; i < n; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
-  if (na <= 0 || nb <= 0) return 0;
-  return dot / (sqrtf(na) * sqrtf(nb));
-}
-
 // ================= begin：残尾修复/计数/净化/对齐/重建工作环 =================
 bool MemorySystem::begin() {
   if (!fs_begin()) return false;
@@ -124,14 +104,6 @@ bool MemorySystem::begin() {
       for (char c : all) if (c == '\n') count_++;
     }
   }
-  // 向量缓存对齐条数
-  embCount_ = 0; embFail_ = 0;
-  size_t esz = fs_size(EMB_PATH);
-  if (esz > 0) {
-    if (esz % (EMB_DIM * 4) != 0) { fs_remove(EMB_PATH); embCount_ = 0; }
-    else embCount_ = esz / (EMB_DIM * 4);
-  }
-  if (embCount_ != count_) { fs_remove(EMB_PATH); embCount_ = 0; }
   reloadWork();
   return true;
 }
@@ -190,8 +162,6 @@ void MemorySystem::rewriteEpisodicByScore() {
   for (auto& r : lines) if (!r.line.empty()) { out += r.line; out += '\n'; }
   fs_write(EP_PATH, out);
   count_ = EP_MAX;
-  fs_remove(EMB_PATH);   // 行序变了 → 向量缓存作废重建
-  embCount_ = 0;
 }
 
 // ================= logEvent / recentContext / recentTurns =================
@@ -244,64 +214,14 @@ int MemorySystem::recentTurns(std::string* out, uint8_t* roles, int max) const {
   return n;
 }
 
-// ================= embedTick（M3 后接通；堆护栏/熔断/限速语义保留） =================
-void MemorySystem::embedTick() {
-  static bool s_poison = false;
-  if (s_poison) return;
-  if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 30000) return;
-  if (embFail_ >= 3) {
-    static uint32_t s_probeMs = 0;
-    if (laap_millis() - s_probeMs < 300000) return;
-    s_probeMs = laap_millis();
-  }
-  if (laap_millis() - embLastMs_ < 30000) return;
-  std::string all;
-  if (!fs_read(EP_PATH, all)) return;
-  int total = 0; bool lineHas = false;
-  for (char ch : all) {
-    if (ch == '\n') { if (lineHas) total++; lineHas = false; }
-    else if (ch != '\r' && ch != ' ' && ch != '\t') lineHas = true;
-  }
-  if (lineHas) total++;
-  if (total <= (int)embCount_) return;
-
-  // 取第 embCount_+1 行
-  size_t pos = 0; int lineno = 0; std::string line;
-  while (pos < all.size()) {
-    size_t eol = all.find('\n', pos);
-    if (eol == std::string::npos) eol = all.size();
-    line = all.substr(pos, eol - pos);
-    pos = eol + 1;
-    if (!line.empty() && ++lineno == (int)embCount_ + 1) break;
-    line.clear();
-  }
-  if (line.empty()) { fs_remove(EMB_PATH); embCount_ = 0; return; }
-  if (line.find("\"x\":\"") == std::string::npos) {
-    ESP_LOGE(TAG, "episodes 第 %u 行损坏，embedding 熔断", (unsigned)(embCount_ + 1));
-    s_poison = true;
-    return;
-  }
-  std::string text = extract_x(line);
-  float* vec = (float*)malloc(EMB_DIM * 4);
-  if (!vec) return;
-  embLastMs_ = laap_millis();
-  if (!call_embedding(text, vec)) { free(vec); embFail_++; return; }
-  embFail_ = 0;
-  std::string bin((const char*)vec, EMB_DIM * 4);
-  if (fs_append(EMB_PATH, bin)) embCount_++;
-  free(vec);
-}
-
-// ================= recallSmart（资源适配度+意图/情绪加权+关键词退通道） =================
+// ================= recallSmart（关键词通道+关系事实，资源适配度调制深度） =================
 std::string MemorySystem::recallSmart(const std::string& query, int maxChars, bool allowNet) {
   struct Hit { std::string line; float score; };
   std::vector<Hit> hits;
 
-  bool allowEmb = (embFail_ < 3) && allowNet;
   int effChars = maxChars;
   {
     uint32_t maxblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (maxblk < 40000) allowEmb = false;
     float depth = 1.0f;
     if (maxblk < 45000) depth -= 0.3f;
     if (mind.bodyStrain >= 0.30f) depth -= 0.3f;
@@ -315,66 +235,21 @@ std::string MemorySystem::recallSmart(const std::string& query, int maxChars, bo
 
   std::string all;
   bool haveFile = fs_read(EP_PATH, all);
+  if (!haveFile || query.size() < 2) return rel;
 
-  // —— 主通道：语义（M3 后接通；call_embedding weak 存根默认失败=走退通道） ——
-  if (allowEmb && haveFile) {
-    float* qv = (float*)malloc(EMB_DIM * 4);
-    if (qv) {
-      embLastMs_ = laap_millis();
-      if (call_embedding(query, qv)) {
-        embFail_ = 0;
-        FILE* ef = fopen("/conscious/mem/emb.bin", "rb");
-        if (ef) {
-          float* rv = (float*)malloc(EMB_DIM * 4);
-          int idx = 0;
-          size_t lpos = 0;
-          while (rv && fread(rv, 1, EMB_DIM * 4, ef) == (size_t)(EMB_DIM * 4)) {
-            if (lpos >= all.size()) break;
-            size_t eol = all.find('\n', lpos);
-            if (eol == std::string::npos) eol = all.size();
-            std::string l = all.substr(lpos, eol - lpos);
-            lpos = eol + 1;
-            if (!l.size()) continue;
-            float fw, fr;
-            parse_wt(l, fw, fr);
-            float wn = (fw > 3 ? 3 : fw) / 3.0f;
-            float sim = cosine_of(qv, rv, EMB_DIM);
-            float ib = bigram_mostly_in(it0, l) ? 0.10f : 0.0f;
-            float mb = (curMood != "calm" && parse_mood(l) == curMood) ? 0.06f : 0.0f;
-            hits.push_back({l, sim * 0.75f + wn * 0.15f + fr * 0.10f + ib + mb});
-            idx++;
-            if (hits.size() > 40) {
-              size_t worst = 0;
-              for (size_t i = 1; i < hits.size(); i++) if (hits[i].score < hits[worst].score) worst = i;
-              hits[worst] = hits.back(); hits.pop_back();
-            }
-          }
-          if (rv) free(rv);
-          fclose(ef);
-        }
-      } else {
-        embFail_++;
-      }
-      free(qv);
-    }
-  }
-
-  // —— 退通道：关键词 ——
-  if (hits.empty() && haveFile && query.size() >= 2) {
-    size_t pos = 0;
-    while (pos < all.size()) {
-      size_t eol = all.find('\n', pos);
-      if (eol == std::string::npos) eol = all.size();
-      std::string l = all.substr(pos, eol - pos);
-      pos = eol + 1;
-      if (!l.size() || l.find(query) == std::string::npos) continue;
-      float fw, fr;
-      parse_wt(l, fw, fr);
-      float wn = (fw > 3 ? 3 : fw) / 3.0f;
-      float ib = bigram_mostly_in(it0, l) ? 0.10f : 0.0f;
-      float mb = (curMood != "calm" && parse_mood(l) == curMood) ? 0.06f : 0.0f;
-      hits.push_back({l, wn * 0.5f + fr * 0.5f + ib + mb});
-    }
+  size_t pos = 0;
+  while (pos < all.size()) {
+    size_t eol = all.find('\n', pos);
+    if (eol == std::string::npos) eol = all.size();
+    std::string l = all.substr(pos, eol - pos);
+    pos = eol + 1;
+    if (!l.size() || l.find(query) == std::string::npos) continue;
+    float fw, fr;
+    parse_wt(l, fw, fr);
+    float wn = (fw > 3 ? 3 : fw) / 3.0f;
+    float ib = bigram_mostly_in(it0, l) ? 0.10f : 0.0f;
+    float mb = (curMood != "calm" && parse_mood(l) == curMood) ? 0.06f : 0.0f;
+    hits.push_back({l, wn * 0.5f + fr * 0.5f + ib + mb});
   }
   if (hits.empty()) return rel;
 
@@ -726,88 +601,31 @@ void MemorySystem::applyTidyOps(const std::string& opsJson) {
   fs_write(EP_PATH, out);
   count_ = kept;
 
-  // 向量缓存同步压缩；对不上整份作废
-  // （emb.bin 满容 1.2MB：全量读/写进内部堆必失败——FILE* 流式过滤重写）
-  bool aligned = false;
-  if ((int)embCount_ == total) {
-    FILE* src = fopen("/conscious/mem/emb.bin", "rb");
-    FILE* dst = fopen("/conscious/mem/emb.bin.tmp", "wb");
-    if (src && dst) {
-      std::vector<char> vec(EMB_DIM * 4);
-      int idx = 0, keptv = 0;
-      bool ok = true;
-      while (idx < total) {
-        if (fread(vec.data(), 1, EMB_DIM * 4, src) != (size_t)(EMB_DIM * 4)) { ok = false; break; }
-        if (!del[idx] &&
-            fwrite(vec.data(), 1, EMB_DIM * 4, dst) != (size_t)(EMB_DIM * 4)) { ok = false; break; }
-        if (!del[idx]) keptv++;
-        idx++;
-      }
-      fclose(src);
-      fclose(dst);
-      if (ok && idx == total && keptv == kept) {
-        remove("/conscious/mem/emb.bin");
-        if (rename("/conscious/mem/emb.bin.tmp", "/conscious/mem/emb.bin") == 0) {
-          embCount_ = keptv;
-          aligned = true;
-        }
-      } else {
-        remove("/conscious/mem/emb.bin.tmp");
-      }
-    } else {
-      if (src) fclose(src);
-      if (dst) fclose(dst);
-      remove("/conscious/mem/emb.bin.tmp");
-    }
-  }
-  if (!aligned) { fs_remove(EMB_PATH); embCount_ = 0; }
-  ESP_LOGI(TAG, "整理完成：删 %d 条，剩 %d 条（向量%s）", cnt, kept, aligned ? "同步压缩" : "作废重建");
+  ESP_LOGI(TAG, "整理完成：删 %d 条，剩 %d 条", cnt, kept);
 }
 
-// ================= noveltyOf（失败不熔断，独白后堆紧张会假失败） =================
+// ================= noveltyOf（关键词基线：片段与已有记忆的字面重复度越低越新颖） =================
 float MemorySystem::noveltyOf(const std::string& text) {
-  if (embFail_ >= 3) return -1;
-  float* qv = (float*)malloc(EMB_DIM * 4);
-  if (!qv) return -1;
-  embLastMs_ = laap_millis();
-  float novelty = -1;
-  if (call_embedding(text, qv)) {
-    embFail_ = 0;
-    float maxCos = 0;
-    // emb.bin 满容 300 条 × 4KB = 1.2MB：fs_read 全量进内部堆必分配失败——
-    // 与 recallSmart 同款 FILE* 流式逐向量读（审计 2026-10-05）
-    FILE* ef = fopen("/conscious/mem/emb.bin", "rb");
-    if (ef) {
-      float* rv = (float*)malloc(EMB_DIM * 4);
-      if (rv) {
-        while (fread(rv, 1, EMB_DIM * 4, ef) == (size_t)(EMB_DIM * 4)) {
-          float c = cosine_of(qv, rv, EMB_DIM);
-          if (c > maxCos) maxCos = c;
-        }
-        free(rv);
-      }
-      fclose(ef);
-    }
-    novelty = 1.0f - maxCos;
-    if (novelty < 0) novelty = 0;
-  }
-  free(qv);
+  if (text.size() < 4) return -1;   // 无法评估
+  std::string all;
+  if (!fs_read(EP_PATH, all)) return 0.5f;   // 没有记忆=全新世界
+  float cov = bigram_coverage(utf8_cut(text, 60), all);
+  float novelty = 1.0f - cov;
+  if (novelty < 0) novelty = 0;
   return novelty;
 }
+
 
 void MemorySystem::clearAll() {
   fs_remove(EP_PATH);
   fs_remove("/mem/semantic.txt");
-  fs_remove(EMB_PATH);
   fs_remove(REL_PATH);
   fs_remove("/mem/intents.txt");
   fs_remove("/mem/feedback.jsonl");
   count_ = 0; workLen_ = 0; workHead_ = 0;
-  embCount_ = 0; embFail_ = 0;
 }
 
 void MemorySystem::onRestored() {
-  embCount_ = 0; embFail_ = 0;
   count_ = 0;
   std::string all;
   if (fs_read(EP_PATH, all)) for (char c : all) if (c == '\n') count_++;

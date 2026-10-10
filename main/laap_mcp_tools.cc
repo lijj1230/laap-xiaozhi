@@ -34,7 +34,7 @@ void laap_register_consciousness_tools() {
                 });
 
     mcp.AddTool("consciousness.recall",
-                "Search the life's own long-term memory (episodes, relations, preferences "
+                "Keyword-search the life's own long-term memory (episodes, relations, preferences "
                 "accumulated across reboots). Use when the user refers to past conversations "
                 "or asks 'do you remember ...'.",
                 PropertyList({Property("query", kPropertyTypeString).SetMaxLength(72),
