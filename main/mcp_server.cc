@@ -15,6 +15,7 @@
 #include "application.h"
 #include "board.h"
 #include "display.h"
+#include "laap_life.h"
 #include "lvgl_image.h"
 #include "lvgl_theme.h"
 #include "settings.h"
@@ -111,6 +112,8 @@ void McpServer::AddCommonTools() {
                     if (!result) {
                         return std::unexpected(std::move(result.error()));
                     }
+                    // LAAP 意识旁听 C：设备"看见"落账（入队即返回，不阻塞协议任务）
+                    laap::life_note_vision(question, *result);
                     return std::move(*result);
                 });
     }

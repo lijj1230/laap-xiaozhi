@@ -26,6 +26,10 @@ void life_note_assistant_sentence(const std::string& text);      // A②：tts s
 void life_note_assistant_done();                                 // A③：tts stop 整轮落账
 void life_note_conversation(const std::string& userText, const std::string& assistantText);  // B
 
+// ---- C 通道：相机落账（mcp_server 的 self.camera.take_photo 拍照成功后调用）----
+// 云视觉服务的描述回来即"看见"：入队 → 心跳落世界模型/情景记忆/好奇满足
+void life_note_vision(const std::string& question, const std::string& description);
+
 // ---- 其余 MCP 工具接口（McpServer 回调在协议任务上下文调用）----
 std::string life_status_snapshot();              // 意识状态 JSON（mutex 快照，无撕裂）
 std::string life_recall(const std::string& query, int maxChars);  // 关键词召回

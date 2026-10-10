@@ -2,7 +2,7 @@
 // LAAP 意识 MCP 工具注册（main 侧——McpServer 是宿主类，意识组件
 // 不反向依赖宿主页眉；本文件是唯一的粘合层）
 // xiaozhi.me 云端 LLM 通过 MCP 协议调用这些工具，实现"云脑调用设备意识"：
-//   consciousness.get_status   需求/情绪/目标/信任快照（回答前感知语气）
+//   consciousness.get_status   需求/情绪/目标/信任快照（含相机最近所见；回答前感知语气）
 //   consciousness.recall       查设备侧长期记忆（跨重启的情景/关系记忆）
 //   consciousness.remember     主人说"记住XX"→ 记忆强化
 //   consciousness.teach_skill  主人教口令技能（触发词+指令由云 LLM 解析）
@@ -30,10 +30,11 @@ void laap_register_consciousness_tools() {
     mcp.AddTool("consciousness.get_status",
                 "Read the digital life's inner state: needs (energy/curiosity/social/security/"
                 "expression), mood, current goal, trust toward the owner, generation, memory "
-                "count — plus the command skills you were taught, the behavior rules you must "
-                "follow, and the goals you keep in mind. Call it before replying when the "
-                "user's message might trigger a taught skill or stored rule, or when you need "
-                "to match your tone to the life's current inner state.",
+                "count, last_seen (what it last saw through its camera, minutes ago) — plus "
+                "the command skills you were taught, the behavior rules you must follow, and "
+                "the goals you keep in mind. Call it before replying when the user's message "
+                "might trigger a taught skill or stored rule, when the user asks what you "
+                "have seen, or when you need to match your tone to the life's inner state.",
                 PropertyList(),
                 [](const PropertyList&) -> ReturnValue {
                     return laap::life_status_snapshot();

@@ -79,6 +79,7 @@ public:
   void onError();
   void sense(float motion, int rssi);
   void senseBody(float tempC, int rssi, uint32_t upMs, float dtMin);
+  void onVision(const std::string& description);   // 相机看见：世界模型记一笔"最近所见"
   void onButtonPress();
 
   // ---- 信任 ----
@@ -111,6 +112,8 @@ public:
   uint32_t lastUserMs = 0;
   float bodyTempC = 0;
   float bodyStrain = 0;
+  std::string lastSeen;        // 相机最近一次"看见"（云视觉服务的描述）
+  uint32_t lastSeenMs = 0;
 
 private:
   Needs n_;

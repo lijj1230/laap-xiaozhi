@@ -33,7 +33,7 @@ static const TickType_t BEAT = pdMS_TO_TICKS(10000);  // 10s 心跳拍
 
 // ---- 单一写者原则：意识态只在本任务读写；外部请求只入队/拷贝 ----
 static std::mutex s_noteMux;
-// 队列元素：0=主人话 1=云端回复；2=记忆强化 3=教技能 5=新意图
+// 队列元素：0=主人话 1=云端回复；2=记忆强化 3=教技能 5=新意图 6=看见（相机）
 static std::deque<std::pair<uint8_t, std::string>> s_notes;
 static HostBusyFn s_hostBusy = nullptr;
 static bool s_sawUserSinceExp = false;       // 预期武装后有无对话动静
@@ -114,6 +114,13 @@ void life_note_conversation(const std::string& userText, const std::string& assi
     s_pairUser.clear();
   }
   enqueue_note_locked(1, assistantText);
+}
+
+// C 通道：宿主相机（self.camera.take_photo）Explain 成功后调用——设备"看见"了。
+// 云视觉服务的描述随拍随回；这里只入队，心跳任务统一落账（单一写者）
+void life_note_vision(const std::string& question, const std::string& description) {
+  if (description.empty()) return;
+  enqueue_note(6, utf8_cut(question, 36) + "|" + utf8_cut(description, 180));
 }
 
 std::string life_status_snapshot() {
@@ -306,6 +313,18 @@ static void drain_notes() {
       if (mind.addIntent(text, (uint32_t)time(nullptr)))
         ESP_LOGI(TAG, "MCP 新目标：「%s」", text.c_str());
       break;
+    case 6: { // 相机：云视觉描述回来——世界模型"看见"+情景记忆+好奇满足
+      size_t bar = text.find('|');
+      std::string q = bar == std::string::npos ? std::string() : text.substr(0, bar);
+      std::string desc = bar == std::string::npos ? text : text.substr(bar + 1);
+      mind.onVision(desc);
+      float nov = memory.noveltyOf(desc);   // 关键词基线新颖度
+      if (nov >= 0) mind.onDiscovery(nov);  // 看到新东西=发现新知（active inference）
+      memory.logEvent("event",
+                      "【看见】" + (q.empty() ? std::string() : "主人让看「" + q + "」：") + desc);
+      ESP_LOGI(TAG, "视觉落账（%uB）：%s", (unsigned)desc.size(), desc.c_str());
+      break;
+    }
     default:
       break;
     }

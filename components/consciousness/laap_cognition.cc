@@ -1,6 +1,7 @@
 #include "laap_cognition.h"
 #include "laap_fs.h"
 #include "laap_skills.h"   // utf8_cut
+#include "laap_util.h"     // json_escape（worldJson 内嵌 last_seen）
 #include <esp_timer.h>
 #include <esp_system.h>
 #include <esp_log.h>
@@ -258,6 +259,12 @@ void Cognition::senseBody(float tempC, int rssi, uint32_t upMs, float dtMin) {
   }
 }
 
+// 相机看见（宿主在拍照 Explain 成功后经 life_note_vision 落账到心跳任务调用）
+void Cognition::onVision(const std::string& description) {
+  lastSeen = utf8_cut(description, 90);
+  lastSeenMs = laap_millis();
+}
+
 void Cognition::trustUpdate(float dPos, float dNeg) {
   trust += 0.02f * dPos - 0.03f * dNeg;
   trust = clampf(trust, 0, 1);
@@ -463,7 +470,17 @@ std::string Cognition::worldJson() const {
            aloneMin, rssiDb, motionLevel, (unsigned)(esp_get_free_heap_size() / 1024),
            n_.energy, n_.curiosity, n_.social, n_.security, n_.expression,
            trust, expectLine().c_str(), moodCn(), goalCn());
-  return std::string(buf);
+  std::string out(buf);
+  if (!lastSeen.empty() && lastSeenMs != 0) {
+    out.pop_back();   // 去掉收尾 '}'，追加"最近看见"
+    out += ",\"last_seen\":\"" + json_escape(lastSeen) + "\"";
+    char mb[48];
+    snprintf(mb, sizeof(mb), ",\"last_seen_min\":%.0f",
+             (laap_millis() - lastSeenMs) / 60000.0f);
+    out += mb;
+    out += "}";
+  }
+  return out;
 }
 
 std::string Cognition::traitsLine() const {

@@ -103,6 +103,17 @@ main/consciousness/
 > 遗留（非代码）：xiaozhi.me 角色介绍按草稿配置（用户侧）；注入文本可能显示在屏幕
 > "用户消息"区（宿主显示层，M6 观察）。
 
+> **2026-10-10 相机落账 C 通道**：设备侧世界模型接入相机——云 LLM 调
+> `self.camera.take_photo`（宿主工具）→ 固件拍照 JPEG 上传云视觉服务 → 描述文本
+> 由 `mcp_server.cc` 回调经 `laap::life_note_vision` 入队（C 通道）→ 心跳落
+> `Cognition::onVision`（worldJson 新增 `last_seen`/`last_seen_min`）、写情景记忆
+> `【看见】…`、按 `noveltyOf` 喂 `onDiscovery`（看到新东西满足好奇）。
+> get_status 描述同步更新（云端可问"你看到过什么"）。
+> 同轮世界模型审计：`motion` 恒 0（板无 IMU，调用点硬编码）、`bodyTempC` 恒 0
+> （senseBody 传 0，板无温度传感器）、`bodyStrain` 由 RSSI+uptime 推算且不上行；
+> 环境数字仅随 get_status 被云端拉取，从不随自发注入上行；相机是唯一真正
+> 往返云端的数据通道。
+
 - **M6**：IDF 6.1 编译通过 → USB 烧录 szpi-esp32s3 → 实机验证（语音对话不干扰 + 自主表达发声 + 重启记忆延续）。
 - **二期**：主对话切设备侧全管线。
 
