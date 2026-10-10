@@ -432,8 +432,17 @@ static void life_task(void*) {
   uint32_t lastTickMs = (uint32_t)(esp_timer_get_time() / 1000LL);
   uint32_t lastIdleMs = 0;
   bool idledOnce = false;
+  bool sntpStarted = false;
   for (;;) {
     vTaskDelay(BEAT);
+    if (!sntpStarted) {
+      // 首拍（开机 ~10s）：此时 app.Initialize 已把 esp_netif/lwIP 起好，SNTP 才能安全启动
+      esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+      esp_sntp_setservername(0, "ntp.aliyuncs.com");
+      esp_sntp_setservername(1, "pool.ntp.org");
+      esp_sntp_init();
+      sntpStarted = true;
+    }
     uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000LL);
     float dtMin = (nowMs - lastTickMs) / 60000.0f;
     lastTickMs = nowMs;
@@ -541,10 +550,8 @@ void life_start() {
   }
   setenv("TZ", "CST-8", 1);
   tzset();
-  esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-  esp_sntp_setservername(0, "ntp.aliyuncs.com");
-  esp_sntp_setservername(1, "pool.ntp.org");
-  esp_sntp_init();
+  // SNTP 必须延到心跳首拍再启：本函数在 app_main 里跑于 app.Initialize()（esp_netif
+  // 起 lwIP）之前，提前 esp_sntp_init 会在 tcpip.c:318 断言崩溃循环（2026-10-10 实测 P0）
   // 身体感：主控 die 温（内置传感器）+ QMI8658 运动（失败则惰性重试，不影响主流程）
   temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 80);
   if (temperature_sensor_install(&tcfg, &s_tsens) == ESP_OK &&
