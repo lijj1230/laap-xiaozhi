@@ -109,10 +109,20 @@ main/consciousness/
 > `Cognition::onVision`（worldJson 新增 `last_seen`/`last_seen_min`）、写情景记忆
 > `【看见】…`、按 `noveltyOf` 喂 `onDiscovery`（看到新东西满足好奇）。
 > get_status 描述同步更新（云端可问"你看到过什么"）。
-> 同轮世界模型审计：`motion` 恒 0（板无 IMU，调用点硬编码）、`bodyTempC` 恒 0
-> （senseBody 传 0，板无温度传感器）、`bodyStrain` 由 RSSI+uptime 推算且不上行；
-> 环境数字仅随 get_status 被云端拉取，从不随自发注入上行；相机是唯一真正
-> 往返云端的数据通道。
+
+> **2026-10-10 身体感补全（motion+体温）**：审计发现两个死字段复活——
+> ① `motion`：移植 laap-esp32 的 QMI8658 驱动（laap_imu.cc，寄存器时序/基线算法
+> 1:1，Wire→i2c_master；`i2c_master_get_bus_handle(1)` 复用宿主板级 I2C1 总线，
+> 与音频编解码器共线带锁安全；未应答时每 ~6 分钟惰性重试，读数 0 不影响主流程）；
+> ② `bodyTempC`：原版 Arduino `temperatureRead()` 无 IDF 等价调用点写 0——改用
+> `esp_driver_tsens` 主控内置 die 温（10-80°C 量程），senseBody 的 >48°C 累积
+> strain 分支恢复真实触发。worldJson 补 `body_temp`/`body_strain` 上行（原先
+> 这两值云端永远看不见）。至此世界模型六维全真：motion/rssi/lastUserMs/
+> temp/strain/lastSeen。
+> 同轮世界模型审计（死字段已由本条全部复活）：除相机外无任何数据真正往返
+> 云端——lastUserMs 触发信号来自云 ASR/log_turn 但值本地算；rssi/time(SNTP)/
+> uptime/heap 纯本地；环境数字只在云调 get_status 时上行（拉模式），从不随
+> 自发注入上行。
 
 - **M6**：IDF 6.1 编译通过 → USB 烧录 szpi-esp32s3 → 实机验证（语音对话不干扰 + 自主表达发声 + 重启记忆延续）。
 - **二期**：主对话切设备侧全管线。

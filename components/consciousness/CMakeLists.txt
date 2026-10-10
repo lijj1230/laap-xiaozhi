@@ -12,6 +12,7 @@ idf_component_register(
          "laap_config.cc"
          "laap_life.cc"
          "laap_search.cc"
+         "laap_imu.cc"
     INCLUDE_DIRS "."
-    PRIV_REQUIRES nvs_flash esp_timer joltwallet__littlefs espressif__cjson esp_wifi esp_http_client
+    PRIV_REQUIRES nvs_flash esp_timer joltwallet__littlefs espressif__cjson esp_wifi esp_http_client esp_driver_tsens esp_driver_i2c
 )

@@ -459,15 +459,17 @@ std::string Cognition::worldJson() const {
   struct tm tmv; localtime_r(&now, &tmv);
   float upH = laap_millis() / 3600000.0f;
   float aloneMin = (laap_millis() - lastUserMs) / 60000.0f;
-  char buf[512];
+  char buf[768];   // +last_seen 追加段与 body 字段余量（-Wformat-truncation 防线）
   snprintf(buf, sizeof(buf),
            "{\"time\":\"%s\",\"hour\":%d,\"uptime_h\":%.1f,\"generation\":%lu,\"cycles\":%lu,"
-           "\"chats\":%lu,\"alone_min\":%.0f,\"wifi_rssi\":%d,\"motion\":%.2f,\"free_heap_kb\":%u,"
+           "\"chats\":%lu,\"alone_min\":%.0f,\"wifi_rssi\":%d,\"motion\":%.2f,"
+           "\"body_temp\":%.1f,\"body_strain\":%.2f,\"free_heap_kb\":%u,"
            "\"needs\":{\"energy\":%.2f,\"curiosity\":%.2f,\"social\":%.2f,\"security\":%.2f,\"expression\":%.2f},"
            "\"trust\":%.2f,%s,\"mood\":\"%s\",\"goal\":\"%s\"}",
            ntpOk ? "known" : "unknown", ntpOk ? tmv.tm_hour : -1, upH,
            (unsigned long)gen_, (unsigned long)cycles_, (unsigned long)chats_,
-           aloneMin, rssiDb, motionLevel, (unsigned)(esp_get_free_heap_size() / 1024),
+           aloneMin, rssiDb, motionLevel, bodyTempC, bodyStrain,
+           (unsigned)(esp_get_free_heap_size() / 1024),
            n_.energy, n_.curiosity, n_.social, n_.security, n_.expression,
            trust, expectLine().c_str(), moodCn(), goalCn());
   std::string out(buf);

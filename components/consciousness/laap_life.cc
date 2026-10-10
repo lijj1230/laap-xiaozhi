@@ -3,6 +3,7 @@
 #include "laap_cognition.h"
 #include "laap_skills.h"
 #include "laap_rules.h"
+#include "laap_imu.h"     // QMI8658：世界模型 motion 通道
 #include "laap_util.h"   // json_escape（快照内嵌技能/规则/目标文本）
 
 #include <esp_log.h>
@@ -11,6 +12,7 @@
 #include <esp_heap_caps.h>
 #include <esp_wifi.h>
 #include <esp_sntp.h>
+#include <driver/temperature_sensor.h>   // 主控内置 die 温：bodyTempC 通道
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <time.h>
@@ -52,6 +54,8 @@ static std::mutex s_snapMux;
 static std::string s_statusSnap = "{}";
 // 宿主注入回调（main 提供）：把想说的话经 listen-detect 发给云端，云 LLM+TTS 出声
 static bool (*s_hostSay)(const std::string&) = nullptr;
+// 主控内置 die 温传感器（启动时装好；nullptr=不可用，此时 bodyTempC=0 即未知）
+static temperature_sensor_handle_t s_tsens = nullptr;
 
 void life_set_host_busy(HostBusyFn fn) { s_hostBusy = fn; }
 void life_set_host_say(bool (*fn)(const std::string&)) { s_hostSay = fn; }
@@ -361,8 +365,10 @@ static void life_task(void*) {
     // ---- PSI 内核 ----
     mind.tick(dtMin);
     int rssi = wifi_rssi();
-    mind.sense(0, rssi);
-    mind.senseBody(0, rssi, nowMs, dtMin);
+    mind.sense(imuMotionLevel(), rssi);        // 真实运动（QMI8658；未就绪内部惰性重试）
+    float tempC = 0;
+    if (s_tsens != nullptr) temperature_sensor_get_celsius(s_tsens, &tempC);
+    mind.senseBody(tempC, rssi, nowMs, dtMin); // 主控 die 温（0=不可用）
     mind.trust += (0.60f - mind.trust) * 0.01f * dtMin;
     // ---- 对话记账消化 ----
     drain_notes();
@@ -442,6 +448,17 @@ void life_start() {
   esp_sntp_setservername(0, "ntp.aliyuncs.com");
   esp_sntp_setservername(1, "pool.ntp.org");
   esp_sntp_init();
+  // 身体感：主控 die 温（内置传感器）+ QMI8658 运动（失败则惰性重试，不影响主流程）
+  temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 80);
+  if (temperature_sensor_install(&tcfg, &s_tsens) == ESP_OK &&
+      temperature_sensor_enable(s_tsens) == ESP_OK) {
+    float t0 = 0;
+    temperature_sensor_get_celsius(s_tsens, &t0);
+    ESP_LOGI(TAG, "体温传感器就绪：%.1f°C", t0);
+  } else {
+    s_tsens = nullptr;
+  }
+  imuInit();
   if (xTaskCreate(life_task, "laap_life", 8192, nullptr, 2, nullptr) != pdPASS) {
     ESP_LOGE(TAG, "心跳任务创建失败（意识停摆，宿主对话不受影响）");
   }

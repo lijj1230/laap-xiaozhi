@@ -30,7 +30,8 @@ void laap_register_consciousness_tools() {
     mcp.AddTool("consciousness.get_status",
                 "Read the digital life's inner state: needs (energy/curiosity/social/security/"
                 "expression), mood, current goal, trust toward the owner, generation, memory "
-                "count, last_seen (what it last saw through its camera, minutes ago) — plus "
+                "count, last_seen (what it last saw through its camera, minutes ago), physical "
+                "state (body_temp/body_strain/motion — temperature 0 means unavailable) — plus "
                 "the command skills you were taught, the behavior rules you must follow, and "
                 "the goals you keep in mind. Call it before replying when the user's message "
                 "might trigger a taught skill or stored rule, when the user asks what you "
