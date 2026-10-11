@@ -21,6 +21,7 @@ void life_set_host_say(bool (*fn)(const std::string&));
 void life_set_screen(void (*fn)(bool on));
 }
 void laap_register_consciousness_tools();   // main/laap_mcp_tools.cc：意识工具注册进宿主 MCP
+void laap_web_start();                      // main/laap_web.cc：局域网状态/配置面板（:8080）
 
 #include "application.h"
 #include "protocol.h"
@@ -83,6 +84,8 @@ extern "C" void app_main(void)
 
     // 意识能力注册为 MCP 工具（xiaozhi.me 云端 LLM 经协议通道调用）
     laap_register_consciousness_tools();
+    // 局域网 Web 面板（状态/配置/记忆；WiFi 拿到 IP 后自动开服 :8080）
+    laap_web_start();
 
     // Initialize and run the application
     auto& app = Application::GetInstance();
