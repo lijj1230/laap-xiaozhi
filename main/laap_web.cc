@@ -1,7 +1,7 @@
 // ============================================================
 // LAAP 局域网 Web 面板（main 侧粘合层，与 laap_mcp_tools 同定位）
-//   http://<设备IP>:8080 —— 状态查看 / NVS 节奏配置修改 / 记忆搜索 /
-//   最近记忆（对话+事件）/ 技能·规则·目标
+//   http://<设备IP>:8080 —— 状态 / 需求 / 实时内存 / NVS 节奏配置 /
+//   记忆搜索 / 设备联网搜索 / 最近记忆 / 技能·规则·目标
 // 端口 8080：配网模式（WifiConfigurationAp）独占 80，避开冲突
 // 线程契约：全部走 laap_life/记忆的只读快照或既有 MCP 同款接口；
 //   配置写与 consciousness.tune 同路径（cfg + NVS，字段级原子读）
@@ -33,47 +33,98 @@ static httpd_handle_t s_server = nullptr;
 static const char* PAGE_HTML = R"HTML(<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Aris · 状态面板</title><style>
-body{font-family:system-ui,-apple-system,"PingFang SC",sans-serif;background:#14161a;color:#e8e8ea;margin:0 auto;padding:16px;max-width:760px}
-h1{font-size:20px;margin:8px 0 2px}h2{font-size:15px;margin:0 0 6px;color:#9aa3b2}
-.card{background:#1e2127;border-radius:12px;padding:14px 16px;margin:10px 0}
-.row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;font-size:14px;border-bottom:1px solid #2a2e36}
+:root{--bg:#0f1115;--card:#181b21;--line:#262a33;--fg:#e8eaf0;--dim:#8b93a3;--accent:#6b9dff;--ok:#5fd08a;--warn:#f0b34e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 system-ui,-apple-system,"PingFang SC",sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:20px 16px 44px}
+header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:4px 0 16px}
+h1{font-size:22px;margin:0;font-weight:600}
+.sub{color:var(--dim);font-size:13px}
+.grid{display:grid;grid-template-columns:1fr;gap:12px}
+@media(min-width:780px){.grid{grid-template-columns:1fr 1fr}.card.wide{grid-column:1/-1}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+h2{font-size:12.5px;margin:0 0 10px;color:var(--dim);font-weight:600;letter-spacing:1px}
+.pills{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.pill{background:#222733;border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-size:12.5px}
+.pill b{color:var(--accent);font-weight:600;font-variant-numeric:tabular-nums}
+.row{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 .row:last-child{border:none}
-.row.blk{display:block;padding:6px 0}
-.row.blk .k{color:#9aa3b2;font-size:13px;margin-bottom:3px}
-.row.blk .v{font-size:14px;line-height:1.55;word-break:break-all}.bar{background:#2a2e36;border-radius:6px;height:10px;flex:1;overflow:hidden}
-.bar>i{display:block;height:100%;background:#5b8def}
-pre{white-space:pre-wrap;word-break:break-all;font-size:13px;line-height:1.5;max-height:340px;overflow:auto;margin:6px 0 0}
-button{background:#5b8def;border:0;color:#fff;border-radius:8px;padding:8px 14px;font-size:14px}
-input{background:#14161a;border:1px solid #2a2e36;color:#e8e8ea;border-radius:8px;padding:7px 10px;font-size:14px}
-label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:6px 0;font-size:14px}
-label input{width:90px;text-align:right}
-</style></head><body>
-<h1>✨ Aris</h1><div id="sub" style="color:#9aa3b2;font-size:13px"></div>
-<div class="card"><h2>状态</h2><div id="status">加载中…</div></div>
-<div class="card"><h2>配置（NVS · 与 consciousness.tune 同源）</h2><div id="cfg"></div>
-<div style="margin-top:8px"><button onclick="saveCfg()">保存</button>
-<span id="cfgmsg" style="color:#7fc97f;font-size:13px"></span></div></div>
-<div class="card"><h2>搜索</h2>
-<div style="display:flex;gap:8px"><input id="q" placeholder="关键词" style="flex:1"><button onclick="doSearch()">搜记忆</button><button onclick="doWebSearch()">搜网络（设备）</button></div>
-<pre id="mres"></pre></div>
-<div class="card"><h2>最近记忆（对话 / 事件 / 看见）</h2><pre id="chat"></pre></div>
-<div class="card"><h2>技能 · 规则 · 目标</h2><pre id="prompt"></pre></div>
+.row .k{color:var(--dim);white-space:nowrap}
+.row .v{text-align:right;font-variant-numeric:tabular-nums;word-break:break-all}
+.row.blk{display:block}.row.blk .v{text-align:left;line-height:1.5;margin-top:2px}
+.meter{display:grid;grid-template-columns:60px 1fr 52px;align-items:center;gap:8px;padding:4px 0;font-size:13px}
+.meter .l{color:var(--dim)}
+.meter .n{text-align:right;font-variant-numeric:tabular-nums;color:#c9cfda}
+.bar{background:#222733;border-radius:6px;height:9px;overflow:hidden}
+.bar>i{display:block;height:100%;border-radius:6px}
+.actions{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+button{background:var(--accent);border:0;color:#0b0d11;font-weight:600;border-radius:9px;padding:8px 14px;font-size:13.5px;cursor:pointer}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--fg)}
+input{background:#12141a;border:1px solid var(--line);color:var(--fg);border-radius:9px;padding:8px 11px;font-size:13.5px;min-width:0}
+.cfg{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px}
+.cfg label{display:flex;justify-content:space-between;align-items:center;gap:8px;color:var(--dim);font-size:13px}
+.cfg input{width:76px;text-align:right}
+pre{white-space:pre-wrap;word-break:break-all;font-size:12.5px;line-height:1.5;max-height:300px;overflow:auto;margin:8px 0 0;color:#c9cfda}
+.ok{color:var(--ok);font-size:13px}
+</style></head><body><div class="wrap">
+<header><h1>✨ Aris</h1><div class="sub" id="sub"></div></header>
+<div class="grid">
+<section class="card"><h2>状态</h2><div class="pills" id="pills"></div><div id="status"></div></section>
+<section class="card"><h2>需求</h2><div id="needs"></div>
+<div id="phys" style="margin-top:8px"></div></section>
+<section class="card"><h2>实时内存</h2><div id="heap"></div></section>
+<section class="card"><h2>配置（NVS · 与语音调参同源）</h2><div class="cfg" id="cfg"></div>
+<div class="actions"><button onclick="saveCfg()">保存</button><span id="cfgmsg" class="ok"></span></div></section>
+<section class="card wide"><h2>搜索</h2>
+<div class="actions"><input id="q" placeholder="关键词…" style="flex:1"><button onclick="doSearch()">搜记忆</button><button class="ghost" onclick="doWebSearch()">搜网络（设备）</button></div>
+<pre id="mres"></pre></section>
+<section class="card wide"><h2>最近记忆（对话 / 事件 / 看见）</h2><pre id="chat"></pre></section>
+<section class="card wide"><h2>技能 · 规则 · 目标</h2><pre id="prompt"></pre></section>
+</div></div>
 <script>
 const $=id=>document.getElementById(id);
 const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-function row(k,v){const lv=esc(v);return lv.length>12
- ?'<div class="row blk"><div class="k">'+esc(k)+'</div><div class="v">'+lv+'</div></div>'
- :'<div class="row"><span style="color:#9aa3b2">'+esc(k)+'</span><span>'+lv+'</span></div>'}
+const MOOD={happy:'😊 开心',curious:'🤔 好奇',calm:'😌 平静',excited:'✨ 兴奋',lonely:'😔 孤独',anxious:'😟 焦虑',tired:'😪 疲惫'};
 async function j(u,o){const r=await fetch(u,o);return await r.text()}
+function row(k,v){const lv=esc(v);return lv.length>14
+ ?'<div class="row blk"><span class="k">'+esc(k)+'</span><span class="v">'+lv+'</span></div>'
+ :'<div class="row"><span class="k">'+esc(k)+'</span><span class="v">'+lv+'</span></div>'}
+function meter(l,p,n,c){return '<div class="meter"><span class="l">'+l+'</span><div class="bar"><i style="width:'+Math.max(0,Math.min(100,p))+'%;background:'+(c||'var(--accent)')+'"></i></div><span class="n">'+n+'</span></div>'}
 function renderStatus(s){try{s=JSON.parse(s)}catch(e){$('status').textContent=s;return}
- $('sub').textContent=(s.ip?('http://'+s.ip+':8080 · '):'')+(s.time=='known'?('设备 '+s.hour+' 时'):'时间未同步');
- const rows=[['情绪',s.mood],['目标',s.goal],['信任',s.trust],['世代','G'+s.generation],['记忆条数',s.memory_count],['体温',s.body_temp?s.body_temp+' °C':'—'],['运动',s.motion],['紧张度',s.body_strain],['运行',s.uptime_h+' h'],['堆',s.free_heap_kb+' KB'],['信号',s.wifi_rssi+' dBm'],['独处',s.alone_min+' min']];
- if(s.last_seen)rows.push(['最近看见',s.last_seen]);if(s.cloud_emotion)rows.push(['云情绪',s.cloud_emotion]);
- if(s.rhythm)rows.push(['节奏',s.rhythm]);
- let h='';for(const[k,v]of rows)h+=row(k,v);
- const n=s.needs||{};for(const[k,lab]of[['energy','能量'],['curiosity','好奇'],['social','社交'],['security','安全'],['expression','表达']]){const p=Math.round((n[k]||0)*100);h+='<div class="row"><span style="color:#9aa3b2">'+lab+'</span><div class="bar"><i style="width:'+p+'%"></i></div><span>'+p+'%</span></div>'}
- $('status').innerHTML=h}
+ $('sub').textContent=(s.ip||'')+' · 设备 '+(s.time=='known'?(s.hour+' 时'):'时间未同步')+' · 已运行 '+s.uptime_h+' h';
+ $('pills').innerHTML='<span class="pill">'+esc(MOOD[s.mood]||s.mood||'—')+'</span>'
+  +'<span class="pill">目标 <b>'+esc(s.goal||'—')+'</b></span>'
+  +'<span class="pill">信任 <b>'+s.trust+'</b></span>'
+  +'<span class="pill">世代 <b>G'+s.generation+'</b></span>'
+  +'<span class="pill">记忆 <b>'+s.memory_count+'</b> 条</span>'
+  +'<span class="pill">独处 <b>'+s.alone_min+'</b> m</span>';
+ let h='';
+ h+=row('体温',s.body_temp?s.body_temp+' °C':'—（传感器不可用）');
+ h+=row('运动 / 紧张',s.motion+' / '+s.body_strain);
+ h+=row('信号',s.wifi_rssi+' dBm');
+ if(s.last_seen)h+=row('最近看见',s.last_seen+(s.last_seen_min!=null?'（'+s.last_seen_min+' 分钟前）':''));
+ if(s.cloud_emotion)h+=row('云情绪',s.cloud_emotion);
+ if(s.broadcast)h+=row('此刻注意',s.broadcast);
+ if(s.pending_say)h+=row('待说心声',s.pending_say);
+ if(s.rhythm)h+=row('节奏',s.rhythm);
+ $('status').innerHTML=h;
+ const n=s.needs||{};
+ const cols={energy:'#f0b34e',curiosity:'#b58cff',social:'#ff8fb1',security:'#6b9dff',expression:'#5fd08a'};
+ const labs={energy:'能量',curiosity:'好奇',social:'社交',security:'安全',expression:'表达'};
+ let hb='';for(const k of['energy','curiosity','social','security','expression']){const p=Math.round((n[k]||0)*100);hb+=meter(labs[k],p,p+'%',cols[k])}
+ $('needs').innerHTML=hb}
 async function loadStatus(){renderStatus(await j('/api/status'))}
+function renderHeap(s){
+ const fi=s.heap_int_kb, lg=s.heap_int_largest_kb, mn=s.heap_int_min_kb, ps=s.psram_free_kb, tot=s.free_heap_kb;
+ let h='';
+ h+=meter('内部空闲',fi/200*100,fi+' KB',fi<40?'var(--warn)':'var(--ok)');
+ h+=meter('最大连续',lg/200*100,lg+' KB',lg<25?'var(--warn)':'var(--accent)');
+ h+=meter('历史最低',mn/200*100,mn+' KB','var(--dim)');
+ h+=meter('PSRAM',ps/8192*100,(ps/1024).toFixed(1)+' MB','#7d8cff');
+ h+=meter('总空闲',tot/10240*100,(tot/1024).toFixed(1)+' MB','var(--accent)');
+ h+=row('碎片度（最大块/空闲）',fi?Math.round(lg/fi*100)+'%':'—');
+ $('heap').innerHTML=h}
+async function loadHeap(){const s=JSON.parse(await j('/api/status'));renderHeap(s)}
 async function loadCfg(){const c=JSON.parse(await j('/api/config'));let h='';
  for(const[k,lab]of[['express_cd_min','表达冷却（分）'],['idle_silence_min','独白静默（分）'],['idle_every_min','独白间隔（分）'],['quiet_start','静音窗起（时）'],['quiet_end','静音窗止（时）'],['screen_off_min','息屏（分）']])
   h+='<label>'+lab+'<input id="c_'+k+'" type="number" value="'+c[k]+'"></label>';
@@ -83,12 +134,13 @@ async function saveCfg(){const fd=new URLSearchParams();
  await j('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:fd});
  $('cfgmsg').textContent='已保存';setTimeout(()=>$('cfgmsg').textContent='',2000);loadStatus()}
 async function doSearch(){const q=$('q').value;if(!q)return;$('mres').textContent='搜索中…';
- try{$('mres').textContent=JSON.parse(await j('/api/memory?q='+encodeURIComponent(q))).text||'（无结果）'}catch(e){$('mres').textContent='搜索失败'}}
+ try{$('mres').textContent='【记忆】'+ (JSON.parse(await j('/api/memory?q='+encodeURIComponent(q))).text||'（无结果）')}catch(e){$('mres').textContent='搜索失败'}}
 async function doWebSearch(){const q=$('q').value;if(!q)return;$('mres').textContent='设备联网搜索中（最多 8 秒）…';
  try{$('mres').textContent='【网络】'+JSON.parse(await j('/api/websearch?q='+encodeURIComponent(q))).text}catch(e){$('mres').textContent='搜索失败'}}
 async function loadChat(){try{$('chat').textContent=JSON.parse(await j('/api/chat')).text}catch(e){}}
 async function loadPrompt(){try{$('prompt').textContent=JSON.parse(await j('/api/prompt')).text||'（还没有教过技能/规则/目标）'}catch(e){}}
-loadStatus();loadCfg();loadChat();loadPrompt();setInterval(loadStatus,5000);
+function tick(){loadStatus();loadHeap()}
+tick();loadCfg();loadChat();loadPrompt();setInterval(tick,5000);
 </script></body></html>)HTML";
 
 // ---------------- 工具 ----------------

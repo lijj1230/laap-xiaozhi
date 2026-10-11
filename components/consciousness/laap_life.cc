@@ -487,8 +487,10 @@ static void life_task(void*) {
     vTaskDelay(BEAT);
     if (!sntpStarted) {
       // 首拍（开机 ~10s）：此时 app.Initialize 已把 esp_netif/lwIP 起好，SNTP 才能安全启动
+      // 服务器必须回 UTC：ntp.aliyuncs.com 实测回北京时间，叠加 TZ=CST-8 会 +16 小时
+      // （2026-10-11 实测：设备 18 点/真实 10 点）——pool.ntp.org 系回真 UTC
       esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-      esp_sntp_setservername(0, "ntp.aliyuncs.com");
+      esp_sntp_setservername(0, "cn.pool.ntp.org");
       esp_sntp_setservername(1, "pool.ntp.org");
       esp_sntp_init();
       sntpStarted = true;

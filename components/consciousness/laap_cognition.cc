@@ -4,6 +4,7 @@
 #include "laap_util.h"     // json_escape（worldJson 内嵌 last_seen）
 #include <esp_timer.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <cmath>
 #include <ctime>
@@ -522,6 +523,18 @@ std::string Cognition::worldJson() const {
   if (!cloudMood_.empty() && cloudMoodMs_ != 0 &&
       laap_millis() - cloudMoodMs_ < 300000UL)
     tail += ",\"cloud_emotion\":\"" + cloudMood_ + "\"";
+  // 实时内存：内部堆（稀缺）/ 最大块（碎片指标）/ 历史最低 / PSRAM 富余
+  {
+    char hb[160];
+    snprintf(hb, sizeof(hb),
+             ",\"heap_int_kb\":%u,\"heap_int_largest_kb\":%u,\"heap_int_min_kb\":%u,"
+             "\"psram_free_kb\":%u",
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+             (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
+             (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024),
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+    tail += hb;
+  }
   if (!tail.empty()) {
     out.pop_back();   // 去掉收尾 '}'
     out += tail;
