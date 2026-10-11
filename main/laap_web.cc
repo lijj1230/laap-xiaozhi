@@ -35,7 +35,10 @@ body{font-family:system-ui,-apple-system,"PingFang SC",sans-serif;background:#14
 h1{font-size:20px;margin:8px 0 2px}h2{font-size:15px;margin:0 0 6px;color:#9aa3b2}
 .card{background:#1e2127;border-radius:12px;padding:14px 16px;margin:10px 0}
 .row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;font-size:14px;border-bottom:1px solid #2a2e36}
-.row:last-child{border:none}.bar{background:#2a2e36;border-radius:6px;height:10px;flex:1;overflow:hidden}
+.row:last-child{border:none}
+.row.blk{display:block;padding:6px 0}
+.row.blk .k{color:#9aa3b2;font-size:13px;margin-bottom:3px}
+.row.blk .v{font-size:14px;line-height:1.55;word-break:break-all}.bar{background:#2a2e36;border-radius:6px;height:10px;flex:1;overflow:hidden}
 .bar>i{display:block;height:100%;background:#5b8def}
 pre{white-space:pre-wrap;word-break:break-all;font-size:13px;line-height:1.5;max-height:340px;overflow:auto;margin:6px 0 0}
 button{background:#5b8def;border:0;color:#fff;border-radius:8px;padding:8px 14px;font-size:14px}
@@ -55,13 +58,17 @@ label input{width:90px;text-align:right}
 <div class="card"><h2>技能 · 规则 · 目标</h2><pre id="prompt"></pre></div>
 <script>
 const $=id=>document.getElementById(id);
+const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function row(k,v){const lv=esc(v);return lv.length>12
+ ?'<div class="row blk"><div class="k">'+esc(k)+'</div><div class="v">'+lv+'</div></div>'
+ :'<div class="row"><span style="color:#9aa3b2">'+esc(k)+'</span><span>'+lv+'</span></div>'}
 async function j(u,o){const r=await fetch(u,o);return await r.text()}
 function renderStatus(s){try{s=JSON.parse(s)}catch(e){$('status').textContent=s;return}
  $('sub').textContent=(s.ip?('http://'+s.ip+':8080 · '):'')+(s.time=='known'?('设备 '+s.hour+' 时'):'时间未同步');
  const rows=[['情绪',s.mood],['目标',s.goal],['信任',s.trust],['世代','G'+s.generation],['记忆条数',s.memory_count],['体温',s.body_temp?s.body_temp+' °C':'—'],['运动',s.motion],['紧张度',s.body_strain],['运行',s.uptime_h+' h'],['堆',s.free_heap_kb+' KB'],['信号',s.wifi_rssi+' dBm'],['独处',s.alone_min+' min']];
  if(s.last_seen)rows.push(['最近看见',s.last_seen]);if(s.cloud_emotion)rows.push(['云情绪',s.cloud_emotion]);
  if(s.rhythm)rows.push(['节奏',s.rhythm]);
- let h='';for(const[k,v]of rows)h+='<div class="row"><span style="color:#9aa3b2">'+k+'</span><span>'+v+'</span></div>';
+ let h='';for(const[k,v]of rows)h+=row(k,v);
  const n=s.needs||{};for(const[k,lab]of[['energy','能量'],['curiosity','好奇'],['social','社交'],['security','安全'],['expression','表达']]){const p=Math.round((n[k]||0)*100);h+='<div class="row"><span style="color:#9aa3b2">'+lab+'</span><div class="bar"><i style="width:'+p+'%"></i></div><span>'+p+'%</span></div>'}
  $('status').innerHTML=h}
 async function loadStatus(){renderStatus(await j('/api/status'))}
