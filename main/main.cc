@@ -53,25 +53,15 @@ extern "C" void app_main(void)
                s == kDeviceStateNotifying;
     });
 
-    // 注入"经云说话"通道：意识想说话 → listen-detect 文本 → xiaozhi 云 LLM+TTS 出声。
-    // 待机时音频通道是关闭的（省电），裸发 detect 会被服务端 goodbye 拒收（M6 实测）——
-    // 须先 OpenAudioChannel 重新握手拿 session_id；建链阻塞 ~1s，Schedule 到主循环执行
+    // 注入"经云说话"通道：意识想说话 → 走完整上游唤醒流程 WakeWordInvoke
+// （OpenAudioChannel + SetListeningMode + EnableVoiceProcessing 一次到位）。
+// 裸发 SendWakeWordDetected 只通控制面：音频面未使能 → 有字幕无声音（M6 实测）；
+// WakeWordInvoke 内部自行 Schedule 到主循环，跨任务安全
     laap::life_set_host_say([](const std::string& text) {
         auto& app = Application::GetInstance();
-        auto* protocol = app.protocol();
-        if (protocol == nullptr) return false;
-        if (protocol->IsAudioChannelOpened()) {
-            protocol->SendWakeWordDetected(text);
-            return true;
-        }
-        app.Schedule([text]() {
-            auto& a = Application::GetInstance();
-            auto* p = a.protocol();
-            if (p == nullptr) return;
-            if (!p->IsAudioChannelOpened() && !p->OpenAudioChannel()) return;
-            p->SendWakeWordDetected(text);
-        });
-        return true;   // 已受理（异步成败心跳不可见，冷却照常计）
+        if (app.protocol() == nullptr) return false;
+        app.WakeWordInvoke(text);
+        return true;   // 已受理（成败细节心跳不可见，冷却照常计）
     });
 
     // 注入息屏开关：闲置自动熄屏/活动恢复（立创板上游无板级息屏，心跳代管）
