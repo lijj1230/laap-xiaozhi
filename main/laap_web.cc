@@ -235,6 +235,18 @@ static esp_err_t h_websearch(httpd_req_t* req) {
   return send_json(req, json_str_field(hit.empty() ? "（无结果或网络暂不可用）" : hit));
 }
 
+static esp_err_t h_train(httpd_req_t* req) {
+  char q[400] = {0};
+  if (!url_get(req, "q", q, sizeof(q)) || q[0] == 0)
+    return send_json(req, std::string("{\"ok\":false,\"text\":\"（缺少 q 参数）\"}"));
+  // 训练通道：敲门注入思考题（与心声门铃同链路；冷却/占用时拒绝并如实返回）
+  bool ok = laap::life_train_ask(q);
+  char buf[64];
+  snprintf(buf, sizeof(buf), "{\"ok\":%s}", ok ? "true" : "false");
+  ESP_LOGI(TAG, "训练题注入：%s「%s」", ok ? "✓" : "✗", q);
+  return send_json(req, std::string(buf));
+}
+
 static esp_err_t h_prompt(httpd_req_t* req) {
   std::string out;
   std::string sk = laap::skills.promptLine();
@@ -292,6 +304,7 @@ static void web_task(void*) {
       {.uri = "/api/chat", .method = HTTP_GET, .handler = h_chat},
       {.uri = "/api/memory", .method = HTTP_GET, .handler = h_memory},
       {.uri = "/api/websearch", .method = HTTP_GET, .handler = h_websearch},
+      {.uri = "/api/train", .method = HTTP_GET, .handler = h_train},
       {.uri = "/api/prompt", .method = HTTP_GET, .handler = h_prompt},
       {.uri = "/api/config", .method = HTTP_GET, .handler = h_cfg_get},
       {.uri = "/api/config", .method = HTTP_POST, .handler = h_cfg_post},

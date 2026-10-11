@@ -19,6 +19,7 @@ const char* consciousness_status_line();
 void life_set_host_busy(bool (*fn)());
 void life_set_host_say(bool (*fn)(const std::string&));
 void life_set_screen(void (*fn)(bool on));
+void life_set_host_speaking(bool (*fn)());
 }
 void laap_register_consciousness_tools();   // main/laap_mcp_tools.cc：意识工具注册进宿主 MCP
 void laap_web_start();                      // main/laap_web.cc：局域网状态/配置面板（:8080）
@@ -51,6 +52,11 @@ extern "C" void app_main(void)
         auto s = Application::GetInstance().GetDeviceState();
         return s == kDeviceStateSpeaking || s == kDeviceStateListening ||
                s == kDeviceStateNotifying;
+    });
+
+    // 训练敲门用：只挡"正在播 TTS"（listening 等待轮是敲门的合法时机）
+    laap::life_set_host_speaking([]() {
+        return Application::GetInstance().GetDeviceState() == kDeviceStateSpeaking;
     });
 
     // 注入"经云说话"通道：意识想说话 → 走完整上游唤醒流程 WakeWordInvoke

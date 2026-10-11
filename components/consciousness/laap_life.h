@@ -19,6 +19,7 @@ void life_start();                               // boot 成功路径末调用�
 void life_set_host_busy(HostBusyFn fn);          // main 注入（DeviceState 忙闲探测）
 void life_set_host_say(HostSayFn fn);            // main 注入（SendWakeWordDetected 适配器）
 void life_set_screen(void (*fn)(bool on));       // main 注入（背光开关；闲置自动息屏）
+void life_set_host_speaking(bool (*fn)());       // main 注入（true=正在播 TTS；训练敲门让路用）
 void life_screen_wake();                         // 任意任务可调：立即点亮屏幕并重置闲置计时
 
 // ---- 对话记账：A 通道（宿主旁听挂点，自动）+ B 通道（MCP log_turn，云端主动）----
@@ -31,6 +32,10 @@ void life_note_conversation(const std::string& userText, const std::string& assi
 // ---- C 通道：相机落账（mcp_server 的 self.camera.take_photo 拍照成功后调用）----
 // 云视觉服务的描述回来即"看见"：入队 → 心跳落世界模型/情景记忆/好奇满足
 void life_note_vision(const std::string& question, const std::string& description);
+
+// ---- 训练通道（PC 脚本经面板 /api/train 调用）：敲门注入一道思考题 ----
+// 返回 false=当前不可训练（冷却/宿主占用/离线）；题目落情景记忆留痕
+bool life_train_ask(const std::string& question);
 
 // ---- D 通道：云情绪回灌（宿主 llm 消息的 emotion 字段，服务器侧情绪分析）----
 void life_note_cloud_emotion(const std::string& mood);

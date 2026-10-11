@@ -43,6 +43,8 @@ static uint32_t s_lastInjectMs = 0;          // 上次 detect 注入时刻（防
 static void (*s_setScreen)(bool on) = nullptr;
 static bool s_screenOff = false;
 static uint32_t s_lastActiveMs = 0;
+// 宿主"正在播 TTS"探测（main 注入）；nullptr=无此探测（按不忙处理）
+static bool (*s_hostSpeaking)(void) = nullptr;
 
 // ---- A+B 双通道记账去重（A=宿主旁听挂点自动 / B=MCP log_turn 云端主动）----
 static std::string s_pairUser;               // 悬挂等待配对的 user 话
@@ -70,6 +72,10 @@ static uint32_t s_pendingSayMs = 0;
 void life_set_host_busy(HostBusyFn fn) { s_hostBusy = fn; }
 void life_set_host_say(bool (*fn)(const std::string&)) { s_hostSay = fn; }
 void life_set_screen(void (*fn)(bool on)) { s_setScreen = fn; }
+void life_set_host_speaking(bool (*fn)()) { s_hostSpeaking = fn; }
+
+// 训练敲门用：true=正在播 TTS（此刻不能抢话筒）
+static bool mind_dominance_speaking() { return s_hostSpeaking && s_hostSpeaking(); }
 
 static void note_activity_locked() {
   // 活动即点亮屏幕（息屏后任何对话/工具动静都唤醒）
@@ -268,6 +274,45 @@ static bool knock_and_pend(const std::string& pending) {
   if (!inject_say(KNOCK)) return false;
   s_pendingSay = pending;
   s_pendingSayMs = (uint32_t)(esp_timer_get_time() / 1000LL);
+  return true;
+}
+
+// 训练通道：PC 训练脚本（train_xiaozhi.py）经面板把思考题敲进云端对话。
+// 会话经济学：一次敲门=打开一个完整对话会话（speaking↔listening 循环，
+// 静默 ~75s 才 goodbye）——会话存续期间（首次敲开后 3 分钟）连续投题
+// 免冷却（只挂 pending_say，云端下一轮 get_status 拉走继续说）；
+// 会话已死才重新敲门（吃 EXPRESS_CD_MIN 冷却）
+static uint32_t s_trainSessionMs = 0;   // 0=无会话；否则=会话锚点时刻
+
+bool life_train_ask(const std::string& question) {
+  if (question.empty()) return false;
+  std::string pend =
+      "【训练】这不是主人说话，是你自己的成长课。请认真思考后回答下面这道题，"
+      "答案走心、具体、有你自己的经历和感受，不要客套：\n" + utf8_cut(question, 200);
+  uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000LL);
+  // 会话存续判据：3 分钟窗口内 **且** 宿主处于对话态（listening=等下一轮、
+  // speaking=在说——都算会话活着；idle=真结束）。只看时间窗会把题挂进死会话
+  bool convAlive = s_hostBusy && s_hostBusy();   // listening/speaking 都为 true
+  bool inSession = s_trainSessionMs != 0 && nowMs - s_trainSessionMs < 180000UL && convAlive;
+  if (inSession) {
+    s_pendingSay = pend;
+    s_pendingSayMs = nowMs;
+    s_trainSessionMs = nowMs;
+    memory.logEvent("event", "【训练题·续】" + utf8_cut(question, 100));
+    return true;
+  }
+  // 新会话=重新敲门：训练无冷却（PC 主动流程，用户拍板）；正在播 TTS 才让路
+  if (mind_dominance_speaking()) return false;
+  if (!s_hostSay) return false;
+  if (!s_hostSay(json_escape(KNOCK))) return false;
+  s_pendingSay = pend;
+  s_pendingSayMs = nowMs;
+  s_trainSessionMs = nowMs;
+  {
+    std::lock_guard<std::mutex> g(s_noteMux);
+    s_asstLoggedThisTurn = false;   // 云回复照常落账（与 inject_say 同款）
+  }
+  memory.logEvent("event", "【训练题】" + utf8_cut(question, 100));
   return true;
 }
 
