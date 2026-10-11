@@ -80,6 +80,7 @@ public:
   void sense(float motion, int rssi);
   void senseBody(float tempC, int rssi, uint32_t upMs, float dtMin);
   void onVision(const std::string& description);   // 相机看见：世界模型记一笔"最近所见"
+  bool onCloudEmotion(const std::string& moodKey); // D 通道：云情绪回灌（白名单，返回命中）
   void onButtonPress();
 
   // ---- 信任 ----
@@ -129,6 +130,8 @@ private:
   float pleasure_ = 0.5f;
   bool evoDirty_ = false;
   uint32_t lastEvoSaveCycle_ = 0;
+  std::string cloudMood_;        // 最近一条云情绪（D 通道；白名单 token）
+  uint32_t cloudMoodMs_ = 0;
   std::string intents_[3];
   uint32_t intentBorn_[3] = {0, 0, 0};
   int intentN_ = 0;

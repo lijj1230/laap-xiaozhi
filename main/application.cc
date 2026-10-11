@@ -679,6 +679,9 @@ void Application::InitializeProtocol() {
         } else if (strcmp(type->valuestring, "llm") == 0) {
             auto emotion = cJSON_GetObjectItem(root, "emotion");
             if (cJSON_IsString(emotion)) {
+                // LAAP 云情绪回灌：服务器对每句回复的情绪判断 → 本地心情微调
+                ESP_LOGI(TAG, "LLM emotion: %s", emotion->valuestring);
+                laap::life_note_cloud_emotion(emotion->valuestring);
                 Schedule([display, emotion_str = std::string(emotion->valuestring)]() {
                     display->SetEmotion(emotion_str.c_str());
                 });

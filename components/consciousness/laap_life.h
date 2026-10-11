@@ -32,6 +32,9 @@ void life_note_conversation(const std::string& userText, const std::string& assi
 // 云视觉服务的描述回来即"看见"：入队 → 心跳落世界模型/情景记忆/好奇满足
 void life_note_vision(const std::string& question, const std::string& description);
 
+// ---- D 通道：云情绪回灌（宿主 llm 消息的 emotion 字段，服务器侧情绪分析）----
+void life_note_cloud_emotion(const std::string& mood);
+
 // ---- 其余 MCP 工具接口（McpServer 回调在协议任务上下文调用）----
 std::string life_status_snapshot();              // 意识状态 JSON（mutex 快照，无撕裂）
 std::string life_recall(const std::string& query, int maxChars);  // 关键词召回

@@ -33,7 +33,7 @@ static const TickType_t BEAT = pdMS_TO_TICKS(10000);  // 10s 心跳拍
 // ---- 单一写者原则：意识态只在本任务读写；外部请求只入队/拷贝 ----
 static std::mutex s_noteMux;
 // 队列元素：0=主人话 1=云端回复；2=记忆强化 3=教技能 5=新意图 6=看见（相机）
-//            7=晨间整理（\x1F 分四段：情绪改写|删除ops|关系行|自我总结）
+//            7=晨间整理（\x1F 分四段：情绪改写|删除ops|关系行|自我总结） 8=云情绪回灌
 static std::deque<std::pair<uint8_t, std::string>> s_notes;
 static HostBusyFn s_hostBusy = nullptr;
 static bool s_sawUserSinceExp = false;       // 预期武装后有无对话动静
@@ -153,6 +153,12 @@ void life_note_conversation(const std::string& userText, const std::string& assi
 void life_note_vision(const std::string& question, const std::string& description) {
   if (description.empty()) return;
   enqueue_note(6, utf8_cut(question, 36) + "|" + utf8_cut(description, 180));
+}
+
+// D 通道：云情绪回灌（宿主 llm 消息的 emotion；服务器侧情绪分析）
+void life_note_cloud_emotion(const std::string& mood) {
+  if (mood.empty()) return;
+  enqueue_note(8, utf8_cut(mood, 16));
 }
 
 std::string life_status_snapshot() {
@@ -441,6 +447,10 @@ static void drain_notes() {
                mm, rr, (unsigned)sec[3].size());
       break;
     }
+    case 8:   // 云情绪回灌：服务器对回复的情绪判断 → 本地心情微调（白名单内）
+      if (mind.onCloudEmotion(text))
+        ESP_LOGI(TAG, "云情绪回灌：%s → 心情微调", text.c_str());
+      break;
     default:
       break;
     }
@@ -642,8 +652,14 @@ void life_start() {
     ESP_LOGI(TAG, "体温传感器就绪：%.1f°C", t0);
   } else {
     s_tsens = nullptr;
+    ESP_LOGW(TAG, "体温传感器不可用（body_temp=0）");
   }
   imuInit();
+  // NVS 节奏配置摘要（查看入口：串口开机日志；修改走 consciousness.tune）
+  ESP_LOGI(TAG, "节奏配置（NVS）：表达冷却%um 独白静默%um 独白间隔%um 静音窗%d-%d点 息屏%um",
+           (unsigned)cfg.expressCdMin, (unsigned)cfg.idleSilenceMin,
+           (unsigned)cfg.idleEveryMin, cfg.quietStart, cfg.quietEnd,
+           (unsigned)cfg.screenOffMin);
   s_lastActiveMs = laap_millis();   // 息屏计时起点=启动时刻（防首拍即判定闲置）
   if (xTaskCreate(life_task, "laap_life", 8192, nullptr, 2, nullptr) != pdPASS) {
     ESP_LOGE(TAG, "心跳任务创建失败（意识停摆，宿主对话不受影响）");

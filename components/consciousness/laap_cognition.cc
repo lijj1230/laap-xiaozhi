@@ -269,6 +269,39 @@ void Cognition::onVision(const std::string& description) {
   lastSeenMs = laap_millis();
 }
 
+// D 通道：云情绪回灌——服务器对每句回复的情绪判断映射为本地微调。
+// 白名单限定 token（防任意串污染 JSON/状态）；幅度小（云情绪是参考不是主导）
+bool Cognition::onCloudEmotion(const std::string& moodKey) {
+  static const char* kOk[] = {"neutral", "happy",  "sad",    "angry", "surprised",
+                              "scared",  "excited", "lonely", "anxious", "calm",
+                              "curious", "tired",  nullptr};
+  bool known = false;
+  for (int i = 0; kOk[i]; i++)
+    if (moodKey == kOk[i]) { known = true; break; }
+  if (!known) return false;
+  cloudMood_ = moodKey;
+  cloudMoodMs_ = laap_millis();
+  if (moodKey == "happy" || moodKey == "excited") {
+    pleasure_ = pleasure_ * 0.85f + 0.15f * 0.88f;      // 聊得开心：满足感上浮
+  } else if (moodKey == "sad" || moodKey == "disgusted") {
+    pleasure_ *= 0.92f; n_.social += 0.015f;            // 低落：更想有人陪
+  } else if (moodKey == "angry" || moodKey == "scared") {
+    pleasure_ *= 0.90f; n_.security += 0.02f;           // 冲突/受惊：警觉上抬
+  } else if (moodKey == "surprised" || moodKey == "curious") {
+    n_.curiosity += 0.02f;                              // 惊讶：好奇被点着
+  } else if (moodKey == "lonely") {
+    n_.social += 0.02f;
+  } else if (moodKey == "anxious") {
+    n_.security += 0.02f;
+  }
+  n_.social = clampf(n_.social, 0.05f, 1.0f);
+  n_.security = clampf(n_.security, 0.05f, 1.0f);
+  n_.curiosity = clampf(n_.curiosity, 0.05f, 1.0f);
+  pleasure_ = clampf(pleasure_, 0.05f, 1.0f);
+  evoDirty_ = true;
+  return true;
+}
+
 void Cognition::trustUpdate(float dPos, float dNeg) {
   trust += 0.02f * dPos - 0.03f * dNeg;
   trust = clampf(trust, 0, 1);
@@ -477,13 +510,21 @@ std::string Cognition::worldJson() const {
            n_.energy, n_.curiosity, n_.social, n_.security, n_.expression,
            trust, expectLine().c_str(), moodCn(), goalCn());
   std::string out(buf);
+  std::string tail;
   if (!lastSeen.empty() && lastSeenMs != 0) {
-    out.pop_back();   // 去掉收尾 '}'，追加"最近看见"
-    out += ",\"last_seen\":\"" + json_escape(lastSeen) + "\"";
+    tail += ",\"last_seen\":\"" + json_escape(lastSeen) + "\"";
     char mb[48];
     snprintf(mb, sizeof(mb), ",\"last_seen_min\":%.0f",
              (laap_millis() - lastSeenMs) / 60000.0f);
-    out += mb;
+    tail += mb;
+  }
+  // 云情绪（D 通道）：白名单 token，5 分钟内有效
+  if (!cloudMood_.empty() && cloudMoodMs_ != 0 &&
+      laap_millis() - cloudMoodMs_ < 300000UL)
+    tail += ",\"cloud_emotion\":\"" + cloudMood_ + "\"";
+  if (!tail.empty()) {
+    out.pop_back();   // 去掉收尾 '}'
+    out += tail;
     out += "}";
   }
   return out;
