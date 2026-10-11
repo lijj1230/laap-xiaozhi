@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <sys/stat.h>
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <esp_littlefs.h>
 
 static const char* TAG = "laap_fs";
@@ -34,6 +35,27 @@ bool fs_mkdir(const std::string& path) {
   if (!s_mounted) return false;
   if (mkdir((MOUNT + path).c_str(), 0755) == 0) return true;
   return errno == EEXIST;   // 已存在=成功
+}
+
+char* fs_read_alloc(const std::string& path, size_t maxBytes, size_t& len) {
+  len = 0;
+  if (!s_mounted) return nullptr;
+  FILE* f = fopen((MOUNT + path).c_str(), "rb");
+  if (!f) return nullptr;
+  if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return nullptr; }
+  long sz = ftell(f);
+  if (sz <= 0) { fclose(f); return nullptr; }
+  size_t n = (size_t)sz < maxBytes ? (size_t)sz : maxBytes;
+  char* buf = (char*)heap_caps_malloc(n + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (buf == nullptr) buf = (char*)malloc(n + 1);   // 无 PSRAM 芯片兜底
+  if (buf == nullptr) { fclose(f); return nullptr; }
+  fseek(f, 0, SEEK_SET);
+  size_t rd = fread(buf, 1, n, f);
+  fclose(f);
+  buf[rd] = 0;
+  len = rd;
+  if (rd == 0) { heap_caps_free(buf); return nullptr; }
+  return buf;
 }
 
 bool fs_read(const std::string& path, std::string& out) {

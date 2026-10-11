@@ -78,17 +78,24 @@ static void collect_char_starts(const std::string& s, std::vector<size_t>& start
   }
 }
 
+// 前置声明（2 参版委托给裸缓冲版，免整块拷贝）
+float bigram_coverage(const std::string& small, const char* big, size_t bigLen);
+
 float bigram_coverage(const std::string& small, const std::string& big) {
-  if (small.size() < 2 || big.size() < 2) return 0;
-  std::vector<size_t> bs, gs;
+  return bigram_coverage(small, big.data(), big.size());
+}
+
+// 裸缓冲版：大文本不整块拷进内部堆（PSRAM 文件缓冲直接用）
+float bigram_coverage(const std::string& small, const char* bigp, size_t bigLen) {
+  if (small.size() < 2 || bigLen < 2) return 0;
+  std::vector<size_t> bs;
   collect_char_starts(small, bs);
-  collect_char_starts(big, gs);
   int total = 0, hit = 0;
   for (size_t i = 0; i + 1 < bs.size(); i++) {
     // 二字组 = 字符 i 与字符 i+1 的完整 UTF-8 字节段
     std::string pair = small.substr(bs[i], (i + 2 < bs.size() ? bs[i + 2] : small.size()) - bs[i]);
     total++;
-    if (big.find(pair) != std::string::npos) hit++;
+    if (memmem(bigp, bigLen, pair.data(), pair.size()) != nullptr) hit++;
   }
   return total >= 3 && hit * 10 >= total * 3 ? (float)hit / total : (total ? (float)hit / total : 0);
 }

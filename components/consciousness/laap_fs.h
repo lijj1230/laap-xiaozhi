@@ -13,6 +13,10 @@ namespace laap {
 bool fs_begin();
 bool fs_mkdir(const std::string& path);   // 建目录（fopen 不建目录——/mem 须先建）
 
+// 整文件读进 PSRAM 缓冲（大文件瞬态不占内部堆；调用方 heap_caps_free）。
+// maxBytes 超限截断；失败返回 nullptr。适用：recall/新颖度/日记尾页等热路径
+char* fs_read_alloc(const std::string& path, size_t maxBytes, size_t& len);
+
 bool fs_read(const std::string& path, std::string& out);   // 不存在=false
 bool fs_write(const std::string& path, const std::string& content);          // 原子：tmp+rename
 bool fs_append(const std::string& path, const std::string& line);            // 追加一行（含\n）

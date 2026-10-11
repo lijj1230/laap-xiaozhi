@@ -220,7 +220,8 @@ int MemorySystem::recentTurns(std::string* out, uint8_t* roles, int max) const {
 
 // ================= recallSmart（关键词通道+关系事实，资源适配度调制深度） =================
 std::string MemorySystem::recallSmart(const std::string& query, int maxChars, bool allowNet) {
-  struct Hit { std::string line; float score; };
+  // hits 只存缓冲内偏移（不复制整行）——大文件读进 PSRAM，内部堆零整块负担
+  struct Hit { size_t off; size_t len; float score; };
   std::vector<Hit> hits;
 
   int effChars = maxChars;
@@ -237,37 +238,44 @@ std::string MemorySystem::recallSmart(const std::string& query, int maxChars, bo
   std::string curMood = mind.moodKey();
   std::string rel = relationsFor(query, it0, 2);
 
-  std::string all;
-  bool haveFile = fs_read(EP_PATH, all);
-  if (!haveFile || query.size() < 2) return rel;
+  if (query.size() < 2) return rel;
+  size_t allLen = 0;
+  char* all = fs_read_alloc(EP_PATH, 200 * 1024, allLen);
+  if (all == nullptr) return rel;
 
   size_t pos = 0;
-  while (pos < all.size()) {
-    size_t eol = all.find('\n', pos);
-    if (eol == std::string::npos) eol = all.size();
-    std::string l = all.substr(pos, eol - pos);
+  while (pos < allLen) {
+    size_t eol = pos;
+    while (eol < allLen && all[eol] != '\n') eol++;
+    std::string l(all + pos, eol - pos);
+    size_t off = pos;
     pos = eol + 1;
-    if (!l.size() || l.find(query) == std::string::npos) continue;
+    if (l.empty() || l.find(query) == std::string::npos) continue;
     float fw, fr;
     parse_wt(l, fw, fr);
     float wn = (fw > 3 ? 3 : fw) / 3.0f;
     float ib = bigram_mostly_in(it0, l) ? 0.10f : 0.0f;
     float mb = (curMood != "calm" && parse_mood(l) == curMood) ? 0.06f : 0.0f;
-    hits.push_back({l, wn * 0.5f + fr * 0.5f + ib + mb});
+    hits.push_back({off, l.size(), wn * 0.5f + fr * 0.5f + ib + mb});
   }
-  if (hits.empty()) return rel;
+  if (hits.empty()) {
+    heap_caps_free(all);
+    return rel;
+  }
 
   std::string out;
   for (int round = 0; round < 3 && !hits.empty(); round++) {
     size_t best = 0;
     for (size_t i = 1; i < hits.size(); i++) if (hits[i].score > hits[best].score) best = i;
-    std::string x = extract_x(hits[best].line);
+    std::string line(all + hits[best].off, hits[best].len);
+    std::string x = extract_x(line);
     if (!x.empty() && out.find(x) == std::string::npos &&
         !(x == query || (query.size() >= 8 && x.find(query) != std::string::npos)))
       out = out.length() ? out + "\n" + x : x;
     hits[best] = hits.back(); hits.pop_back();
     if ((int)out.length() >= effChars) break;
   }
+  heap_caps_free(all);
   if (!rel.empty()) out = out.length() ? out + "\n" + rel : rel;
   return out;
 }
@@ -525,19 +533,20 @@ std::string MemorySystem::episodicTail(int n) {
 }
 
 std::string MemorySystem::episodicNumberedTail(int n) {
-  std::string all;
-  if (!fs_read(EP_PATH, all)) return "";
+  size_t allLen = 0;
+  char* all = fs_read_alloc(EP_PATH, 200 * 1024, allLen);
+  if (all == nullptr) return "";
   int total = 0;
-  for (char c : all) if (c == '\n') total++;
+  for (size_t i = 0; i < allLen; i++) if (all[i] == '\n') total++;
   int startNo = total - n + 1;
   if (startNo < 1) startNo = 1;
   std::string out;
   int lineno = 0;
   size_t pos = 0;
-  while (pos < all.size()) {
-    size_t eol = all.find('\n', pos);
-    if (eol == std::string::npos) eol = all.size();
-    std::string l = all.substr(pos, eol - pos);
+  while (pos < allLen) {
+    size_t eol = pos;
+    while (eol < allLen && all[eol] != '\n') eol++;
+    std::string l(all + pos, eol - pos);
     pos = eol + 1;
     while (!l.empty() && (l.front() == ' ' || l.front() == '\r')) l.erase(l.begin());
     while (!l.empty() && (l.back() == ' ' || l.back() == '\r')) l.pop_back();
@@ -545,6 +554,7 @@ std::string MemorySystem::episodicNumberedTail(int n) {
     lineno++;
     if (lineno >= startNo) out += std::to_string(lineno) + ". " + l + "\n";
   }
+  heap_caps_free(all);
   return out;
 }
 
@@ -611,9 +621,11 @@ void MemorySystem::applyTidyOps(const std::string& opsJson) {
 // ================= noveltyOf（关键词基线：片段与已有记忆的字面重复度越低越新颖） =================
 float MemorySystem::noveltyOf(const std::string& text) {
   if (text.size() < 4) return -1;   // 无法评估
-  std::string all;
-  if (!fs_read(EP_PATH, all)) return 0.5f;   // 没有记忆=全新世界
-  float cov = bigram_coverage(utf8_cut(text, 60), all);
+  size_t allLen = 0;
+  char* all = fs_read_alloc(EP_PATH, 200 * 1024, allLen);
+  if (all == nullptr) return 0.5f;   // 没有记忆=全新世界
+  float cov = bigram_coverage(utf8_cut(text, 60), all, allLen);
+  heap_caps_free(all);
   float novelty = 1.0f - cov;
   if (novelty < 0) novelty = 0;
   return novelty;

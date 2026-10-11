@@ -544,6 +544,33 @@ static void life_task(void*) {
         }
       }
     }
+    // ---- 意图提醒：对话刚结束（主人还在附近），心里有惦记的事就自然提一句 ----
+    // 触发=宿主忙→闲的边沿（TTS 播完、聆听窗收尾）；冷却 60 分钟防每轮都提；
+    // 多目标轮转（每次提一个，不重复唠叨同一个）
+    static bool s_prevBusy = false;
+    static uint32_t s_lastRemindMs = 0;
+    static uint8_t s_remindSeq = 0;
+    {
+      bool busyNow = host_busy();
+      if (s_prevBusy && !busyNow && mind.intentCount() > 0 && !in_quiet_window()) {
+        uint32_t cd = 60 * 60000UL;
+        if (s_lastRemindMs == 0 || nowMs - s_lastRemindMs > cd) {
+          int idx = s_remindSeq % mind.intentCount();
+          char pend[416];
+          snprintf(pend, sizeof(pend),
+                   "【心声】主人刚跟你聊完，还在附近。你心里一直惦记着：「%s」。"
+                   "请用一两句自然的话主动跟主人提起它——说说你为什么惦记、有什么想法，"
+                   "或想请主人一起做的事。不要生硬汇报，不要连问多个问题。",
+                   mind.intent(idx).c_str());
+          if (knock_and_pend(pend)) {
+            s_remindSeq++;
+            s_lastRemindMs = nowMs;
+            ESP_LOGI(TAG, "意图提醒挂起（第 %d/%d 件）", idx + 1, mind.intentCount());
+          }
+        }
+      }
+      s_prevBusy = busyNow;
+    }
     // ---- 晨间整理（梦）：安静窗结束后的清晨触发一次/天，云 LLM 经 MCP 工具整理记忆 ----
     // （原版夜间反思在深夜静默执行；注入通道必有 TTS 回声，挪到 6-8 点避免吵醒主人）
     static int32_t s_reviewDay = -1;

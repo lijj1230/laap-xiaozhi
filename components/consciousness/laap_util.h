@@ -16,6 +16,8 @@ std::string json_escape(const std::string& s);
 // 二字组覆盖率：小片段（提问/目标）的大二字组有多少出现在大文本中（0..1）
 // —— 跑题检测与关系召回的相关性判定（v3.53 语义）
 float bigram_coverage(const std::string& small, const std::string& big);
+// 同上但大文本走裸缓冲（PSRAM 里的大文件免整块拷进内部堆；M6 内存优化）
+float bigram_coverage(const std::string& small, const char* big, size_t bigLen);
 
 // 二字组多数命中：small 的二字组 ≥30% 出现在 big 里（召回加分判据）
 bool bigram_mostly_in(const std::string& small, const std::string& big);
