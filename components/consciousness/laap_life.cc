@@ -309,7 +309,7 @@ static void try_express(bool forced, const char* trigger) {
            mind.needs().security * 100, mind.needs().expression * 100,
            mind.moodCn(), goal.c_str(), time_slot_cn().c_str());
   ESP_LOGI(TAG, "表达心声挂起（%s）", trigger);
-  knock_and_pend(pend);
+  if (!knock_and_pend(pend)) ESP_LOGI(TAG, "表达敲门未送出（冷却/宿主占用/离线）");
 }
 
 // ============================================================
@@ -340,7 +340,10 @@ static bool try_monologue(bool force) {
              slot.c_str());
   }
   ESP_LOGI(TAG, "独白心声挂起%s", wantIntent ? "（意图驱动）" : "");
-  if (!knock_and_pend(pend)) return false;
+  if (!knock_and_pend(pend)) {
+    ESP_LOGI(TAG, "独白敲门未送出（冷却/宿主占用/离线）");
+    return false;
+  }
   s_monoSeq++;   // 经云出声才算推进节拍（目标结算由云/主人后续完成）
   return true;
 }
@@ -490,20 +493,7 @@ static void life_task(void*) {
       esp_sntp_init();
       sntpStarted = true;
     }
-    // E2E 诊断（测试构建，开机一次性）：敲门 + 挂诊断心声（验证短 detect 接受度
-    // 与 pending_say 拉取链路——云端需配合角色介绍才会调 get_status）。M6 后移除
-    static uint8_t s_diagBeat = 0;
-    if (++s_diagBeat == 3) {
-      ESP_LOGI(TAG, "E2E 诊断：敲门+挂诊断心声");
-      knock_and_pend(
-          "【心声】这不是主人说话，是一次自我体检。请依次调这些工具："
-          "① consciousness.get_status；② consciousness.recall（query 填「时间」）；"
-          "③ self.web_search（query 填「今日新闻」）；"
-          "④ consciousness.teach_skill（trigger「报时」instruction「说出现在时间」）；"
-          "⑤ consciousness.add_intent（goal「了解主人的作息」）；"
-          "⑥ self.camera.take_photo（question「眼前有什么」）。"
-          "最后用不超过 30 字总结这次体检，工具结果不用逐条念。");
-    }
+    // E2E 诊断块已摘除（2026-10-11 语音验证通过，M6 观察完毕）
     uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000LL);
     float dtMin = (nowMs - lastTickMs) / 60000.0f;
     lastTickMs = nowMs;

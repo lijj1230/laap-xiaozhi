@@ -11,6 +11,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <cctype>
 #include <string>
 
 #include "laap_config.h"
@@ -19,6 +20,7 @@
 #include "laap_skills.h"
 #include "laap_rules.h"
 #include "laap_cognition.h"
+#include "laap_search.h"
 #include "laap_util.h"
 
 #include "wifi_manager.h"
@@ -51,8 +53,8 @@ label input{width:90px;text-align:right}
 <div class="card"><h2>配置（NVS · 与 consciousness.tune 同源）</h2><div id="cfg"></div>
 <div style="margin-top:8px"><button onclick="saveCfg()">保存</button>
 <span id="cfgmsg" style="color:#7fc97f;font-size:13px"></span></div></div>
-<div class="card"><h2>记忆搜索</h2>
-<div style="display:flex;gap:8px"><input id="q" placeholder="关键词" style="flex:1"><button onclick="doSearch()">搜索</button></div>
+<div class="card"><h2>搜索</h2>
+<div style="display:flex;gap:8px"><input id="q" placeholder="关键词" style="flex:1"><button onclick="doSearch()">搜记忆</button><button onclick="doWebSearch()">搜网络（设备）</button></div>
 <pre id="mres"></pre></div>
 <div class="card"><h2>最近记忆（对话 / 事件 / 看见）</h2><pre id="chat"></pre></div>
 <div class="card"><h2>技能 · 规则 · 目标</h2><pre id="prompt"></pre></div>
@@ -82,6 +84,8 @@ async function saveCfg(){const fd=new URLSearchParams();
  $('cfgmsg').textContent='已保存';setTimeout(()=>$('cfgmsg').textContent='',2000);loadStatus()}
 async function doSearch(){const q=$('q').value;if(!q)return;$('mres').textContent='搜索中…';
  try{$('mres').textContent=JSON.parse(await j('/api/memory?q='+encodeURIComponent(q))).text||'（无结果）'}catch(e){$('mres').textContent='搜索失败'}}
+async function doWebSearch(){const q=$('q').value;if(!q)return;$('mres').textContent='设备联网搜索中（最多 8 秒）…';
+ try{$('mres').textContent='【网络】'+JSON.parse(await j('/api/websearch?q='+encodeURIComponent(q))).text}catch(e){$('mres').textContent='搜索失败'}}
 async function loadChat(){try{$('chat').textContent=JSON.parse(await j('/api/chat')).text}catch(e){}}
 async function loadPrompt(){try{$('prompt').textContent=JSON.parse(await j('/api/prompt')).text||'（还没有教过技能/规则/目标）'}catch(e){}}
 loadStatus();loadCfg();loadChat();loadPrompt();setInterval(loadStatus,5000);
@@ -101,7 +105,25 @@ static std::string json_str_field(const std::string& s) {
 static bool url_get(httpd_req_t* req, const char* key, char* out, size_t n) {
   char qbuf[512];
   if (httpd_req_get_url_query_str(req, qbuf, sizeof(qbuf)) != ESP_OK) return false;
-  return httpd_query_key_value(qbuf, key, out, n) == ESP_OK;
+  if (httpd_query_key_value(qbuf, key, out, n) != ESP_OK) return false;
+  // esp_http_server 不解码百分号：中文查询词会以 %E4%BB%8A 原样到达
+  // （不解码=二次编码搜出乱结果，实测；+ 号同按空格还原）
+  char* o = out;
+  for (char* p = out; *p; p++) {
+    if (*p == '%' && isxdigit((unsigned char)p[1]) && isxdigit((unsigned char)p[2])) {
+      auto hex = [](char c) -> int {
+        return (c >= '0' && c <= '9') ? c - '0' : (tolower((unsigned char)c) - 'a' + 10);
+      };
+      *o++ = (char)(hex(p[1]) * 16 + hex(p[2]));
+      p += 2;
+    } else if (*p == '+') {
+      *o++ = ' ';
+    } else {
+      *o++ = *p;
+    }
+  }
+  *o = 0;
+  return true;
 }
 
 static void apply_cfg_field(const char* key, long v) {
@@ -150,6 +172,15 @@ static esp_err_t h_memory(httpd_req_t* req) {
     return send_json(req, std::string("{\"text\":\"（缺少 q 参数）\"}"));
   std::string hit = laap::life_recall(q, 500);
   return send_json(req, json_str_field(hit.empty() ? "（记忆里没有找到相关内容）" : hit));
+}
+
+static esp_err_t h_websearch(httpd_req_t* req) {
+  char q[160] = {0};
+  if (!url_get(req, "q", q, sizeof(q)) || q[0] == 0)
+    return send_json(req, std::string("{\"text\":\"（缺少 q 参数）\"}"));
+  // 面板在线测设备搜索（与 self.web_search 同源；httpd 任务上下文，8s 预算）
+  std::string hit = laap::laapSearch.search(q);
+  return send_json(req, json_str_field(hit.empty() ? "（无结果或网络暂不可用）" : hit));
 }
 
 static esp_err_t h_prompt(httpd_req_t* req) {
@@ -208,6 +239,7 @@ static void web_task(void*) {
       {.uri = "/api/status", .method = HTTP_GET, .handler = h_status},
       {.uri = "/api/chat", .method = HTTP_GET, .handler = h_chat},
       {.uri = "/api/memory", .method = HTTP_GET, .handler = h_memory},
+      {.uri = "/api/websearch", .method = HTTP_GET, .handler = h_websearch},
       {.uri = "/api/prompt", .method = HTTP_GET, .handler = h_prompt},
       {.uri = "/api/config", .method = HTTP_GET, .handler = h_cfg_get},
       {.uri = "/api/config", .method = HTTP_POST, .handler = h_cfg_post},

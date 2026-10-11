@@ -12,8 +12,10 @@
 
 static const char* TAG = "laap_search";
 static const int SEARCH_BUDGET_MS = 8000;   // 协议任务阻塞上限（MCP 工具同步等结果）
-static const uint32_t HEAP_FLOOR = 45000;   // 云对话期间双 TLS 并存，退化区不点火
-static const int BODY_MAX = 52000;          // 老安卓 UA 的必应精简页：结果全在 ~48KB 内
+static const uint32_t HEAP_FLOOR = 30000;   // TLS 握手内部堆底线（2026-10-11 实测：本机稳态
+                                            // 最大内部块 <45KB 是常态，45K 门禁把搜索全挡了；
+                                            // 响应缓冲已挪 PSRAM，内部堆只担 TLS ~30KB）
+static const int BODY_MAX = 64000;          // 覆盖桌面版页面（结果块 56KB 起）与精简页
 // 精简页 UA：服务端给老手机发的页面比桌面版小一半且结果块提前（桌面 98KB/56KB 起，
 // 精简 60KB/39KB 起）；format=rss 端点已被必应下线（302→首页，M6 实测）
 static const char* UA = "Mozilla/5.0 (Linux; U; Android 2.3; zh-cn) AppleWebKit/533.1";
@@ -130,26 +132,34 @@ static void restore_entities(std::string& v) {
 }
 
 // ---- 必应 HTML 结果解析：class="b_algo" 块 → <h2>标题</h2> + <p>摘要</p> ----
+// 关键：h2/p 必须在**本结果块的 </li> 边界内**搜索——桌面版页面脚本区也含
+// "b_algo" 字符串，无界搜索会捞到脚本噪声（实测'解析无结果'根因之一）
+static const char* find_in(const char* from, const char* end, const char* needle, size_t n) {
+  if (from >= end) return nullptr;
+  return (const char*)memmem(from, (size_t)(end - from), needle, n);
+}
+
 static std::string extract_bing_items(const char* body, int len, int maxHit, int maxLen) {
   std::string out;
   int hit = 0;
   const char* p = body;
   const char* end = body + len;
   while (hit < maxHit && p < end) {
-    const char* algo = strstr(p, "b_algo");
-    if (!algo || algo >= end) break;
-    const char* li = strstr(algo, "</li>");   // 本结果块右边界（防串到下一块）
+    const char* algo = find_in(p, end, "b_algo", 6);
+    if (!algo) break;
+    const char* blockEnd = find_in(algo, end, "</li>", 5);
+    if (!blockEnd) blockEnd = end;          // 无闭合：以文末为界
     p = algo + 6;
-    const char* h2 = strstr(algo, "<h2");
-    if (!h2 || (li && h2 > li)) continue;     // 本块没标题：跳过
-    const char* h2e = strstr(h2, "</h2>");
-    if (!h2e) break;
+    const char* h2 = find_in(algo, blockEnd, "<h2", 3);
+    if (!h2) continue;                      // 本块没标题：跳过
+    const char* h2e = find_in(h2, blockEnd, "</h2>", 5);
+    if (!h2e) continue;
     std::string title;
     strip_tags(h2, h2e - h2, title);
     std::string desc;
-    const char* pp = strstr(h2e, "<p");
-    if (pp && (!li || pp < li)) {
-      const char* pe = strstr(pp, "</p>");
+    const char* pp = find_in(h2e, blockEnd, "<p", 2);
+    if (pp) {
+      const char* pe = find_in(pp, blockEnd, "</p>", 4);
       if (pe) strip_tags(pp, pe - pp, desc);
     }
     restore_entities(title);
@@ -169,12 +179,17 @@ static std::string extract_bing_items(const char* body, int len, int maxHit, int
 
 std::string LaapSearch::search(const std::string& query, int maxHit, int maxLen) {
   lastError.clear();
-  // 堆门禁：本函数运行在协议任务（云对话进行中，宿主 TLS 在场）——
-  // 内部堆退化区再叠一层 TLS 会把碎片压穿（v3.76h 血泪），软失败让云端降级回答
-  if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < HEAP_FLOOR) {
-    lastError = "堆紧张，搜索跳过";
-    ESP_LOGW(TAG, "%s", lastError.c_str());
-    return "";
+  // 堆门禁：内部堆最大块 < TLS 握手需求时不点火（软失败让云端降级回答）；
+  // 日志带实际块值，便于随版本标定
+  {
+    uint32_t blk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (blk < HEAP_FLOOR) {
+      char e[48];
+      snprintf(e, sizeof(e), "堆紧张，搜索跳过（最大块%uB）", (unsigned)blk);
+      lastError = e;
+      ESP_LOGW(TAG, "%s", lastError.c_str());
+      return "";
+    }
   }
   if (query.empty()) {
     lastError = "空查询";
@@ -182,8 +197,11 @@ std::string LaapSearch::search(const std::string& query, int maxHit, int maxLen)
     return "";
   }
   std::string url = "https://cn.bing.com/search?q=" + url_encode(query) + "&mkt=zh-CN";
-  char* body = (char*)malloc(BODY_MAX);
-  if (body == nullptr) {   // malloc 判空（-fno-exceptions 下 string 大块分配会 abort）
+  // 响应缓冲放 PSRAM（64KB 大块不占内部堆——内部堆留给 TLS 握手；malloc 判空，
+  // -fno-exceptions 下 string 大块分配失败是 abort）
+  char* body = (char*)heap_caps_malloc(BODY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (body == nullptr) body = (char*)malloc(BODY_MAX);   // 无 PSRAM 芯片的兜底
+  if (body == nullptr) {
     lastError = "响应缓冲分配失败";
     ESP_LOGW(TAG, "%s", lastError.c_str());
     return "";
@@ -193,10 +211,16 @@ std::string LaapSearch::search(const std::string& query, int maxHit, int maxLen)
   std::string out;
   if (ok && memmem(body, bodyLen, "b_algo", 6) != nullptr) {
     out = extract_bing_items(body, bodyLen, maxHit, maxLen);
-    if (out.empty()) lastError = "解析无结果（页面结构变？）";
-  } else if (ok)
-    lastError = "无结果块（反爬页？）";
-  else
+    if (out.empty()) {
+      char e[64];
+      snprintf(e, sizeof(e), "解析无结果（%dB）", bodyLen);
+      lastError = e;
+    }
+  } else if (ok) {
+    char e[64];
+    snprintf(e, sizeof(e), "无结果块（反爬页？%dB）", bodyLen);
+    lastError = e;
+  } else
     lastError = "搜索页获取失败";
   free(body);
   if (out.empty()) ESP_LOGW(TAG, "%s", lastError.c_str());
