@@ -11,11 +11,13 @@
 //   consciousness.log_turn     每轮对话转发进设备侧记忆（B 通道；与宿主旁听 A 通道去重并存）
 //   consciousness.night_review_context  晨间整理素材（编号情景记忆+关系+自我总结，只读）
 //   consciousness.night_review_apply    提交整理决定（删低质/改情绪标签/抽关系/新总结）
+//   consciousness.tune         节奏调参（表达冷却/独白/静音窗/息屏，NVS 持久化）
 //   self.web_search            设备侧联网搜索（必应 RSS；零云配额零 Key）
 // 线程契约：所有回调只走 laap_life 的队列/快照接口（单一写者=心跳任务）；
 // web_search 例外：就地同步 HTTP（协议任务本来就同步等工具结果，相机工具同模式）
 // ============================================================
 #include "mcp_server.h"
+#include "laap_config.h"   // consciousness.tune：节奏调参落 NVS
 #include "laap_life.h"
 #include "laap_search.h"
 
@@ -160,6 +162,45 @@ void laap_register_consciousness_tools() {
                         properties["summary"].value<std::string>());
                 });
 
+    mcp.AddTool("consciousness.tune",
+                "Adjust the life's liveliness rhythm at runtime; persisted to NVS (survives "
+                "reboots). Every parameter is optional — omit it (or pass -1) to keep the "
+                "current value. express_cd_min: minimum minutes between spontaneous expressions "
+                "(0-240, 0 = no cooldown). idle_silence_min: quiet minutes before it may start "
+                "a monologue (0-1440). idle_every_min: minutes between monologues (0-1440, "
+                "0 = monologue off). quiet_start / quiet_end: quiet hours 0-23 when it never "
+                "speaks on its own, e.g. 23 and 6. screen_off_min: minutes of inactivity "
+                "before the screen turns off (0-240, 0 = never). Use when the user says it "
+                "talks too much or too little, or wants a different bedtime. Current values "
+                "are in get_status under rhythm.",
+                PropertyList({Property("express_cd_min", kPropertyTypeInteger, -1, -1, 240),
+                              Property("idle_silence_min", kPropertyTypeInteger, -1, -1, 1440),
+                              Property("idle_every_min", kPropertyTypeInteger, -1, -1, 1440),
+                              Property("quiet_start", kPropertyTypeInteger, -1, -1, 23),
+                              Property("quiet_end", kPropertyTypeInteger, -1, -1, 23),
+                              Property("screen_off_min", kPropertyTypeInteger, -1, -1, 240)}),
+                [](const PropertyList& properties) -> ReturnValue {
+                    auto get = [&](const char* k) { return properties[k].value<int>(); };
+                    if (get("express_cd_min") >= 0) laap::cfg.expressCdMin = (uint32_t)get("express_cd_min");
+                    if (get("idle_silence_min") >= 0) laap::cfg.idleSilenceMin = (uint32_t)get("idle_silence_min");
+                    if (get("idle_every_min") >= 0) laap::cfg.idleEveryMin = (uint32_t)get("idle_every_min");
+                    if (get("quiet_start") >= 0) laap::cfg.quietStart = get("quiet_start");
+                    if (get("quiet_end") >= 0) laap::cfg.quietEnd = get("quiet_end");
+                    if (get("screen_off_min") >= 0) laap::cfg.screenOffMin = (uint32_t)get("screen_off_min");
+                    bool ok = laap::cfg.save();
+                    char buf[160];
+                    snprintf(buf, sizeof(buf),
+                             "%s 表达冷却%um 独白%u-%um 静音%d-%d点 息屏%um",
+                             ok ? "已调整：" : "已调整（NVS 写失败，重启还原）：",
+                             (unsigned)laap::cfg.expressCdMin,
+                             (unsigned)laap::cfg.idleSilenceMin,
+                             (unsigned)laap::cfg.idleEveryMin,
+                             laap::cfg.quietStart, laap::cfg.quietEnd,
+                             (unsigned)laap::cfg.screenOffMin);
+                    ESP_LOGI(TAG, "MCP tune ← 云端：%s", buf);
+                    return std::string(buf);
+                });
+
     mcp.AddTool("self.web_search",
                 "Search the web FROM THE DEVICE itself (free, unlimited, no quota, no key) "
                 "using Bing web search. Use this tool whenever the reply needs fresh "
@@ -175,5 +216,5 @@ void laap_register_consciousness_tools() {
                     return hit;
                 });
 
-    ESP_LOGI(TAG, "意识 MCP 工具已注册（10 个）");
+    ESP_LOGI(TAG, "意识 MCP 工具已注册（11 个）");
 }

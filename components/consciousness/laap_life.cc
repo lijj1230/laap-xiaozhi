@@ -1,4 +1,5 @@
 #include "laap_life.h"
+#include "laap_config.h"   // 节奏运行时配置（NVS；consciousness.tune 写入）
 #include "laap_memory.h"
 #include "laap_cognition.h"
 #include "laap_skills.h"
@@ -25,13 +26,8 @@ static const char* TAG = "laap_life";
 namespace laap {
 
 // ============================================================
-// 节奏常量（原版 laap_config 默认值；M6 实机标定后再决定进 NVS）
+// 节奏参数已迁入 NVS（laap_config；缺键=默认）；本文件只保留拍频
 // ============================================================
-static const uint32_t EXPRESS_CD_MIN = 5;     // 主动表达冷却（分钟）
-static const uint32_t IDLE_SILENCE_MIN = 10;  // 独白起始静默（分钟）
-static const uint32_t IDLE_EVERY_MIN = 20;    // 独白间隔（分钟）
-static const int QUIET_START = 23, QUIET_END = 6;   // 静音窗
-static const uint32_t SCREEN_OFF_MIN = 1;      // 闲置息屏（分钟；任意对话活动唤醒）
 static const TickType_t BEAT = pdMS_TO_TICKS(10000);  // 10s 心跳拍
 
 // ---- 单一写者原则：意识态只在本任务读写；外部请求只入队/拷贝 ----
@@ -229,7 +225,7 @@ static bool in_quiet_window() {
   time_t now = time(nullptr);
   struct tm t;
   localtime_r(&now, &t);
-  return t.tm_hour >= QUIET_START || t.tm_hour < QUIET_END;
+  return t.tm_hour >= cfg.quietStart || t.tm_hour < cfg.quietEnd;
 }
 static int wifi_rssi() {
   wifi_ap_record_t ap;
@@ -247,7 +243,7 @@ static bool inject_say(const std::string& deviceSay) {
   if (!s_hostSay) return false;
   if (host_busy()) return false;             // 云对话进行中：让路
   uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000LL);
-  if (s_lastInjectMs != 0 && nowMs - s_lastInjectMs < EXPRESS_CD_MIN * 60000UL) return false;
+  if (s_lastInjectMs != 0 && nowMs - s_lastInjectMs < cfg.expressCdMin * 60000UL) return false;
   if (!s_hostSay(json_escape(deviceSay))) return false;
   s_lastInjectMs = nowMs;
   mind.onExpressed(true);                    // 表达完成（云侧成败设备不可见）
@@ -292,7 +288,7 @@ static void try_express(bool forced, const char* trigger) {
   if (!forced && in_quiet_window()) return;    // 静音窗只拦"需求自己涨上来的"
   if (!forced && host_busy()) return;          // 宿主对话中让路，不占冷却
   uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000LL);
-  uint32_t cd = EXPRESS_CD_MIN * 60000UL;
+  uint32_t cd = cfg.expressCdMin * 60000UL;
   static uint32_t s_lastTryMs = 0;
   if (!forced && s_lastTryMs != 0 && nowMs - s_lastTryMs < cd) return;
   s_lastTryMs = nowMs;
@@ -532,8 +528,8 @@ static void life_task(void*) {
     // ---- 表达：dominance 过阈值（经云出声）----
     if (mind.dominance() >= 0.55f) try_express(false, "tick");
     // ---- 独白：静默期后按间隔，心里有驱动才开口 ----
-    if (IDLE_EVERY_MIN > 0 && !host_busy() && !in_quiet_window()) {
-      uint32_t idleGap = (idledOnce ? IDLE_EVERY_MIN : IDLE_SILENCE_MIN) * 60000UL;
+    if (cfg.idleEveryMin > 0 && !host_busy() && !in_quiet_window()) {
+      uint32_t idleGap = (idledOnce ? cfg.idleEveryMin : cfg.idleSilenceMin) * 60000UL;
       bool needDriven = mind.intentCount() > 0 ||
                         mind.needs().curiosity >= 0.55f ||
                         mind.needs().expression >= 0.55f;
@@ -577,11 +573,11 @@ static void life_task(void*) {
     // 无符号相减会下溢成 40 亿→每拍误息屏（实测）
     {
       uint32_t nowMs2 = (uint32_t)(esp_timer_get_time() / 1000LL);
-      if (s_setScreen != nullptr && !s_screenOff &&
-          nowMs2 - s_lastActiveMs > SCREEN_OFF_MIN * 60000UL) {
+      if (s_setScreen != nullptr && !s_screenOff && cfg.screenOffMin > 0 &&
+          nowMs2 - s_lastActiveMs > cfg.screenOffMin * 60000UL) {
         s_setScreen(false);
         s_screenOff = true;
-        ESP_LOGI(TAG, "闲置 %u 分钟，息屏", SCREEN_OFF_MIN);
+        ESP_LOGI(TAG, "闲置 %u 分钟，息屏", (unsigned)cfg.screenOffMin);
       }
     }
     mind.saveEvolution();
@@ -607,6 +603,13 @@ static void life_task(void*) {
         // 心声门铃的内容：敲门已发出（短 detect），云端 get_status 到这里取话
         if (!s_pendingSay.empty())
           snap += ",\"pending_say\":\"" + json_escape(s_pendingSay) + "\"";
+        // 节奏参数外带（云端回答"你多久说一次话"的依据；tune 调参前先看现值）
+        char rhy[128];
+        snprintf(rhy, sizeof(rhy), ",\"rhythm\":\"表达冷却%um 独白%u-%um 静音%d-%d点 息屏%um\"",
+                 (unsigned)cfg.expressCdMin, (unsigned)cfg.idleSilenceMin,
+                 (unsigned)cfg.idleEveryMin, cfg.quietStart, cfg.quietEnd,
+                 (unsigned)cfg.screenOffMin);
+        snap += rhy;
         snap += "}";
       }
       std::lock_guard<std::mutex> g(s_snapMux);
