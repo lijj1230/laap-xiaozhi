@@ -31,6 +31,7 @@ static const uint32_t EXPRESS_CD_MIN = 5;     // 主动表达冷却（分钟）
 static const uint32_t IDLE_SILENCE_MIN = 10;  // 独白起始静默（分钟）
 static const uint32_t IDLE_EVERY_MIN = 20;    // 独白间隔（分钟）
 static const int QUIET_START = 23, QUIET_END = 6;   // 静音窗
+static const uint32_t SCREEN_OFF_MIN = 1;      // 闲置息屏（分钟；任意对话活动唤醒）
 static const TickType_t BEAT = pdMS_TO_TICKS(10000);  // 10s 心跳拍
 
 // ---- 单一写者原则：意识态只在本任务读写；外部请求只入队/拷贝 ----
@@ -42,6 +43,10 @@ static HostBusyFn s_hostBusy = nullptr;
 static bool s_sawUserSinceExp = false;       // 预期武装后有无对话动静
 static size_t s_lastUserLen = 0;             // 最近的用户话语长度（回复到达时进化用）
 static uint32_t s_lastInjectMs = 0;          // 上次 detect 注入时刻（防连发）
+// 息屏管理：宿主背光开关（main 注入）；有活动即亮、闲置 SCREEN_OFF_MIN 分钟熄
+static void (*s_setScreen)(bool on) = nullptr;
+static bool s_screenOff = false;
+static uint32_t s_lastActiveMs = 0;
 
 // ---- A+B 双通道记账去重（A=宿主旁听挂点自动 / B=MCP log_turn 云端主动）----
 static std::string s_pairUser;               // 悬挂等待配对的 user 话
@@ -68,15 +73,32 @@ static uint32_t s_pendingSayMs = 0;
 
 void life_set_host_busy(HostBusyFn fn) { s_hostBusy = fn; }
 void life_set_host_say(bool (*fn)(const std::string&)) { s_hostSay = fn; }
+void life_set_screen(void (*fn)(bool on)) { s_setScreen = fn; }
+
+static void note_activity_locked() {
+  // 活动即点亮屏幕（息屏后任何对话/工具动静都唤醒）
+  if (s_screenOff && s_setScreen != nullptr) {
+    s_setScreen(true);
+    s_screenOff = false;
+  }
+  s_lastActiveMs = (uint32_t)(esp_timer_get_time() / 1000LL);
+}
 
 static void enqueue_note_locked(uint8_t kind, const std::string& text) {
   if (s_notes.size() >= 24) s_notes.pop_front();   // 积压保护：丢最旧
   s_notes.emplace_back(kind, text);
+  note_activity_locked();
 }
 
 static void enqueue_note(uint8_t kind, const std::string& text) {
   std::lock_guard<std::mutex> g(s_noteMux);
   enqueue_note_locked(kind, text);
+}
+
+// 任意任务可调（板级按钮回调等）：立即点亮 + 重置闲置计时
+void life_screen_wake() {
+  std::lock_guard<std::mutex> g(s_noteMux);
+  note_activity_locked();
 }
 
 // A 通道①：stt（主人说的话）。同文 180s 去重——MCP log_turn 送来的 user_text 是同一句
@@ -544,6 +566,24 @@ static void life_task(void*) {
     // 心声 TTL：15 分钟没人理=过期清空（防陈旧指令被后来的 get_status 误读）
     if (!s_pendingSay.empty() && nowMs - s_pendingSayMs > 900000UL)
       s_pendingSay.clear();
+    // 宿主忙（聆听/说话/播报）= 用户在互动：点亮兜底（板级按钮钩子之外的保险）
+    if (host_busy()) {
+      std::lock_guard<std::mutex> g(s_noteMux);
+      note_activity_locked();
+    }
+    // ---- 息屏：闲置 SCREEN_OFF_MIN 分钟 → 背光归零 ----
+    // （上游仅部分板在板级实现息屏；立创板无——补在心跳：唯一知道"对话是否在发生"的地方）
+    // 用实时时间减：beat 开头的 nowMs 早于本拍 drain/activity 更新的 lastActive，
+    // 无符号相减会下溢成 40 亿→每拍误息屏（实测）
+    {
+      uint32_t nowMs2 = (uint32_t)(esp_timer_get_time() / 1000LL);
+      if (s_setScreen != nullptr && !s_screenOff &&
+          nowMs2 - s_lastActiveMs > SCREEN_OFF_MIN * 60000UL) {
+        s_setScreen(false);
+        s_screenOff = true;
+        ESP_LOGI(TAG, "闲置 %u 分钟，息屏", SCREEN_OFF_MIN);
+      }
+    }
     mind.saveEvolution();
     // ---- MCP 状态快照刷新（含主人教的技能/须遵守的规则/惦记的目标——
     //      "声音"人设由 xiaozhi.me 角色介绍定义；这里供"该遵守什么"）----
@@ -601,6 +641,7 @@ void life_start() {
     s_tsens = nullptr;
   }
   imuInit();
+  s_lastActiveMs = laap_millis();   // 息屏计时起点=启动时刻（防首拍即判定闲置）
   if (xTaskCreate(life_task, "laap_life", 8192, nullptr, 2, nullptr) != pdPASS) {
     ESP_LOGE(TAG, "心跳任务创建失败（意识停摆，宿主对话不受影响）");
   }

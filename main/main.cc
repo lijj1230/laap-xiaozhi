@@ -18,6 +18,7 @@ bool consciousness_init();
 const char* consciousness_status_line();
 void life_set_host_busy(bool (*fn)());
 void life_set_host_say(bool (*fn)(const std::string&));
+void life_set_screen(void (*fn)(bool on));
 }
 void laap_register_consciousness_tools();   // main/laap_mcp_tools.cc：意识工具注册进宿主 MCP
 
@@ -70,6 +71,14 @@ extern "C" void app_main(void)
             p->SendWakeWordDetected(text);
         });
         return true;   // 已受理（异步成败心跳不可见，冷却照常计）
+    });
+
+    // 注入息屏开关：闲置自动熄屏/活动恢复（立创板上游无板级息屏，心跳代管）
+    laap::life_set_screen([](bool on) {
+        auto* backlight = Board::GetInstance().GetBacklight();
+        if (backlight == nullptr) return;
+        if (on) backlight->RestoreBrightness();
+        else backlight->SetBrightness(0);
     });
 
     // 意识能力注册为 MCP 工具（xiaozhi.me 云端 LLM 经协议通道调用）

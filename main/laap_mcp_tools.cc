@@ -40,8 +40,9 @@ void laap_register_consciousness_tools() {
                 "speaking — follow pending_say and reply accordingly (first person, as the "
                 "life itself), then it will be cleared. Call this tool before replying when "
                 "the user's message might trigger a taught skill or stored rule, when the user "
-                "asks what you have seen, or when you need to match your tone to the life's "
-                "inner state.",
+                "asks what you have seen, when the user asks about your body or physical "
+                "condition (temperature/feelings), or when you need to match your tone to the "
+                "life's inner state.",
                 PropertyList(),
                 [](const PropertyList&) -> ReturnValue {
                     ESP_LOGI(TAG, "MCP get_status ← 云端");

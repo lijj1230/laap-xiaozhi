@@ -18,6 +18,8 @@ using HostSayFn = bool (*)(const std::string&);  // 注入说话；false=宿主�
 void life_start();                               // boot 成功路径末调用：黑匣子+SNTP+任务
 void life_set_host_busy(HostBusyFn fn);          // main 注入（DeviceState 忙闲探测）
 void life_set_host_say(HostSayFn fn);            // main 注入（SendWakeWordDetected 适配器）
+void life_set_screen(void (*fn)(bool on));       // main 注入（背光开关；闲置自动息屏）
+void life_screen_wake();                         // 任意任务可调：立即点亮屏幕并重置闲置计时
 
 // ---- 对话记账：A 通道（宿主旁听挂点，自动）+ B 通道（MCP log_turn，云端主动）----
 // 双通道并存，内置去重：用户同文 180s 只记一次；每轮回复只记一条（首达优先）

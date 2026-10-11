@@ -7,6 +7,7 @@
 #include "config.h"
 #include "i2c_device.h"
 #include "esp32_camera.h"
+#include "laap_life.h"   // 息屏管理：按钮按下立即亮屏
 #include "mcp_server.h"
 #include "press_to_talk_mcp_tool.h"
 
@@ -102,6 +103,7 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            laap::life_screen_wake();   // 任何按钮动作先亮屏（息屏状态下的聆听入口）
             auto& app = Application::GetInstance();
             // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
             if (app.GetDeviceState() == kDeviceStateStarting) {
@@ -115,6 +117,7 @@ private:
         });
 
         boot_button_.OnPressDown([this]() {
+            laap::life_screen_wake();   // 长按说话按下即亮屏
             if (press_to_talk_tool_ && press_to_talk_tool_->IsPressToTalkEnabled()) {
                 Application::GetInstance().StartListening();
             }
@@ -127,6 +130,7 @@ private:
 
 #if CONFIG_USE_DEVICE_AEC
         boot_button_.OnDoubleClick([this]() {
+            laap::life_screen_wake();
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateIdle) {
                 app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);

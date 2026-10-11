@@ -191,9 +191,10 @@ std::string LaapSearch::search(const std::string& query, int maxHit, int maxLen)
   int bodyLen = 0;
   bool ok = http_get_buf(url, SEARCH_BUDGET_MS, body, BODY_MAX, bodyLen);
   std::string out;
-  if (ok && memmem(body, bodyLen, "b_algo", 6) != nullptr)
+  if (ok && memmem(body, bodyLen, "b_algo", 6) != nullptr) {
     out = extract_bing_items(body, bodyLen, maxHit, maxLen);
-  else if (ok)
+    if (out.empty()) lastError = "解析无结果（页面结构变？）";
+  } else if (ok)
     lastError = "无结果块（反爬页？）";
   else
     lastError = "搜索页获取失败";
